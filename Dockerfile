@@ -19,4 +19,5 @@ COPY . .
 
 EXPOSE 10000
 
-CMD ["uvicorn", "main.py:app", "--host", "0.0.0.0", "--port", "10000"]
+# Исправленная команда запуска (без .py в имени модуля)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
