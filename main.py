@@ -1,6 +1,7 @@
 import io
 import os
 import subprocess
+import uuid
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -8,13 +9,12 @@ from PIL import Image, ImageOps
 import pillow_heif
 import pytesseract
 
-# Регистрируем декодер HEIC и AVIF (для самых новых iPhone) в библиотеке Pillow
+# Регистрируем декодер HEIC и AVIF (запасной вариант)
 pillow_heif.register_heif_opener()
 pillow_heif.register_avif_opener()
 
 app = FastAPI(title="Plikowo Micro-Backend")
 
-# Разрешаем веб-сайту делать запросы к серверу (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,49 +30,56 @@ def home():
 # --- 1. КОНВЕРТАЦИЯ HEIC -> JPG/PNG ---
 @app.post("/convert-heic")
 async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"):
-    # ЖЕЛЕЗОБЕТОННЫЙ МЕТОД: Сохраняем файл на диск сервера. 
-    # С-библиотеки работают с реальными файлами гораздо стабильнее, чем с оперативной памятью.
-    input_path = f"/tmp/{file.filename or 'temp.heic'}"
+    # Генерируем уникальное имя файла, чтобы пользователи не мешали друг другу
+    file_id = uuid.uuid4().hex
+    input_path = f"/tmp/{file_id}_in.heic"
+    
+    fmt = "jpg" if target_format.lower() in ["jpg", "jpeg"] else "png"
+    output_path = f"/tmp/{file_id}_out.{fmt}"
+    mime = "image/jpeg" if fmt == "jpg" else "image/png"
+    
     try:
         content = await file.read()
         with open(input_path, "wb") as f:
             f.write(content)
         
-        # Читаем файл физически с диска
-        image = Image.open(input_path)
+        # --- ВАРИАНТ 1: Системная утилита C++ (heif-convert) ---
+        # Идеально переваривает Live Photos, тяжелые слои и новые кодеки Apple
+        cmd = ["heif-convert", "-q", "92", input_path, output_path]
+        process = subprocess.run(cmd, capture_output=True, text=True)
         
-        # Применяем правильный поворот с Айфона (EXIF Orientation), чтобы фото не было боком
-        try:
-            image = ImageOps.exif_transpose(image)
-        except Exception:
-            pass
+        # --- ВАРИАНТ 2: Резервный (через Python Pillow) ---
+        # Если системная утилита не помогла, пробуем Python-модуль
+        if process.returncode != 0 or not os.path.exists(output_path):
+            image = Image.open(input_path)
+            try:
+                image = ImageOps.exif_transpose(image)
+            except Exception:
+                pass
+            
+            if fmt == "jpg" and image.mode != "RGB":
+                if image.mode in ("RGBA", "LA", "P"):
+                    background = Image.new("RGB", image.size, (255, 255, 255))
+                    background.paste(image, mask=image.split()[-1] if image.mode == "RGBA" else None)
+                    image = background
+                else:
+                    image = image.convert("RGB")
+                    
+            image.save(output_path, format="JPEG" if fmt == "jpg" else "PNG", quality=92)
         
-        output_stream = io.BytesIO()
-        fmt = "JPEG" if target_format.lower() in ["jpg", "jpeg"] else "PNG"
-        mime = "image/jpeg" if fmt == "JPEG" else "image/png"
+        # Читаем готовый файл и отдаем пользователю
+        with open(output_path, "rb") as f:
+            output_bytes = f.read()
+            
+        return Response(content=output_bytes, media_type=mime)
         
-        # Умная конвертация прозрачности для форматов JPEG
-        if fmt == "JPEG" and image.mode != "RGB":
-            if image.mode in ("RGBA", "LA"):
-                background = Image.new("RGB", image.size, (255, 255, 255))
-                background.paste(image, mask=image.split()[-1])
-                image = background
-            else:
-                image = image.convert("RGB")
-        
-        image.save(output_stream, format=fmt, quality=92)
-        output_stream.seek(0)
-        
-        # Заметаем следы: удаляем временный файл
-        if os.path.exists(input_path):
-            os.remove(input_path)
-        
-        return Response(content=output_stream.getvalue(), media_type=mime)
     except Exception as e:
-        # Если была ошибка - тоже обязательно удаляем временный файл
-        if os.path.exists(input_path):
-            os.remove(input_path)
         raise HTTPException(status_code=400, detail=f"HEIC Conversion Error: {str(e)}")
+        
+    finally:
+        # Обязательно удаляем временные файлы, чтобы сервер не забился мусором
+        if os.path.exists(input_path): os.remove(input_path)
+        if os.path.exists(output_path): os.remove(output_path)
 
 # --- 2. КОНВЕРТАЦИЯ WORD/EXCEL -> PDF ---
 @app.post("/convert-doc")
@@ -81,12 +88,10 @@ async def convert_doc_to_pdf(file: UploadFile = File(...)):
         filename = file.filename
         content = await file.read()
         
-        # Сохраняем временный файл
         input_path = f"/tmp/{filename}"
         with open(input_path, "wb") as f:
             f.write(content)
             
-        # Запускаем LibreOffice в консоли для конвертации в PDF
         cmd = [
             "libreoffice", "--headless", "--convert-to", "pdf",
             "--outdir", "/tmp", input_path
@@ -99,7 +104,6 @@ async def convert_doc_to_pdf(file: UploadFile = File(...)):
         with open(output_path, "rb") as f:
             pdf_bytes = f.read()
             
-        # Удаляем временные файлы
         if os.path.exists(input_path): os.remove(input_path)
         if os.path.exists(output_path): os.remove(output_path)
         
@@ -114,7 +118,6 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
         content = await file.read()
         image = Image.open(io.BytesIO(content))
         
-        # Распознаем текст с помощью Tesseract OCR
         extracted_text = pytesseract.image_to_string(image, lang=lang)
         
         return {"success": True, "text": extracted_text.strip()}
