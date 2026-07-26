@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Устанавливаем системные утилиты: LibreOffice и OCR (Tesseract + языковые пакеты)
+# Устанавливаем системные утилиты: LibreOffice, OCR и системный конвертер HEIC (C++)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     tesseract-ocr \
@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-rus \
     tesseract-ocr-pol \
     tesseract-ocr-eng \
+    libheif-examples \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -19,5 +20,4 @@ COPY . .
 
 EXPOSE 10000
 
-# Исправленная команда запуска (без .py в имени модуля)
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
