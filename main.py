@@ -8,10 +8,10 @@ from PIL import Image
 import pillow_heif
 import pytesseract
 
-# Регистрируем декодер HEIC в библиотеке Pillow
+# Регистрируем декодер HEIC и AVIF (для самых новых iPhone) в библиотеке Pillow
 pillow_heif.register_heif_opener()
+pillow_heif.register_avif_opener()
 
-# ВОТ ЭТА СТРОЧКА, КОТОРУЮ ИЩЕТ РЕНДЕР:
 app = FastAPI(title="Plikowo Micro-Backend")
 
 # Разрешаем веб-сайту делать запросы к серверу (CORS)
@@ -37,6 +37,18 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
         output_stream = io.BytesIO()
         fmt = "JPEG" if target_format.lower() in ["jpg", "jpeg"] else "PNG"
         mime = "image/jpeg" if fmt == "JPEG" else "image/png"
+        
+        # ФИКС: Если картинка имеет прозрачность (RGBA) или другой режим, 
+        # библиотека Pillow выдаст Ошибку 400 при попытке сохранить её в формат JPEG.
+        # Поэтому принудительно конвертируем в обычный RGB перед сохранением в JPG.
+        if fmt == "JPEG" and image.mode != "RGB":
+            # Создаем белый фон, чтобы прозрачные участки не стали черными
+            if image.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", image.size, (255, 255, 255))
+                background.paste(image, mask=image.split()[-1] if image.mode == "RGBA" else None)
+                image = background
+            else:
+                image = image.convert("RGB")
         
         image.save(output_stream, format=fmt, quality=92)
         output_stream.seek(0)
