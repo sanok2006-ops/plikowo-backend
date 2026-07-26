@@ -4,7 +4,7 @@ import subprocess
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from PIL import Image
+from PIL import Image, ImageOps
 import pillow_heif
 import pytesseract
 
@@ -30,22 +30,32 @@ def home():
 # --- 1. КОНВЕРТАЦИЯ HEIC -> JPG/PNG ---
 @app.post("/convert-heic")
 async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"):
+    # ЖЕЛЕЗОБЕТОННЫЙ МЕТОД: Сохраняем файл на диск сервера. 
+    # С-библиотеки работают с реальными файлами гораздо стабильнее, чем с оперативной памятью.
+    input_path = f"/tmp/{file.filename or 'temp.heic'}"
     try:
         content = await file.read()
-        image = Image.open(io.BytesIO(content))
+        with open(input_path, "wb") as f:
+            f.write(content)
+        
+        # Читаем файл физически с диска
+        image = Image.open(input_path)
+        
+        # Применяем правильный поворот с Айфона (EXIF Orientation), чтобы фото не было боком
+        try:
+            image = ImageOps.exif_transpose(image)
+        except Exception:
+            pass
         
         output_stream = io.BytesIO()
         fmt = "JPEG" if target_format.lower() in ["jpg", "jpeg"] else "PNG"
         mime = "image/jpeg" if fmt == "JPEG" else "image/png"
         
-        # ФИКС: Если картинка имеет прозрачность (RGBA) или другой режим, 
-        # библиотека Pillow выдаст Ошибку 400 при попытке сохранить её в формат JPEG.
-        # Поэтому принудительно конвертируем в обычный RGB перед сохранением в JPG.
+        # Умная конвертация прозрачности для форматов JPEG
         if fmt == "JPEG" and image.mode != "RGB":
-            # Создаем белый фон, чтобы прозрачные участки не стали черными
-            if image.mode in ("RGBA", "LA", "P"):
+            if image.mode in ("RGBA", "LA"):
                 background = Image.new("RGB", image.size, (255, 255, 255))
-                background.paste(image, mask=image.split()[-1] if image.mode == "RGBA" else None)
+                background.paste(image, mask=image.split()[-1])
                 image = background
             else:
                 image = image.convert("RGB")
@@ -53,8 +63,15 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
         image.save(output_stream, format=fmt, quality=92)
         output_stream.seek(0)
         
+        # Заметаем следы: удаляем временный файл
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        
         return Response(content=output_stream.getvalue(), media_type=mime)
     except Exception as e:
+        # Если была ошибка - тоже обязательно удаляем временный файл
+        if os.path.exists(input_path):
+            os.remove(input_path)
         raise HTTPException(status_code=400, detail=f"HEIC Conversion Error: {str(e)}")
 
 # --- 2. КОНВЕРТАЦИЯ WORD/EXCEL -> PDF ---
