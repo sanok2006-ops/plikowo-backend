@@ -8,10 +8,13 @@ from fastapi.responses import Response
 from PIL import Image, ImageOps
 import pillow_heif
 import pytesseract
+from rembg import remove, new_session
 
-# Регистрируем декодер HEIC и AVIF (запасной вариант)
 pillow_heif.register_heif_opener()
 pillow_heif.register_avif_opener()
+
+# Инициализируем сессию нейросети U2-Net
+rembg_session = new_session("u2net")
 
 app = FastAPI(title="Plikowo Micro-Backend")
 
@@ -30,7 +33,6 @@ def home():
 # --- 1. КОНВЕРТАЦИЯ HEIC -> JPG/PNG ---
 @app.post("/convert-heic")
 async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"):
-    # Генерируем уникальное имя файла, чтобы пользователи не мешали друг другу
     file_id = uuid.uuid4().hex
     input_path = f"/tmp/{file_id}_in.heic"
     
@@ -43,13 +45,9 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
         with open(input_path, "wb") as f:
             f.write(content)
         
-        # --- ВАРИАНТ 1: Системная утилита C++ (heif-convert) ---
-        # Идеально переваривает Live Photos, тяжелые слои и новые кодеки Apple
         cmd = ["heif-convert", "-q", "92", input_path, output_path]
         process = subprocess.run(cmd, capture_output=True, text=True)
         
-        # --- ВАРИАНТ 2: Резервный (через Python Pillow) ---
-        # Если системная утилита не помогла, пробуем Python-модуль
         if process.returncode != 0 or not os.path.exists(output_path):
             image = Image.open(input_path)
             try:
@@ -67,7 +65,6 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
                     
             image.save(output_path, format="JPEG" if fmt == "jpg" else "PNG", quality=92)
         
-        # Читаем готовый файл и отдаем пользователю
         with open(output_path, "rb") as f:
             output_bytes = f.read()
             
@@ -77,7 +74,6 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
         raise HTTPException(status_code=400, detail=f"HEIC Conversion Error: {str(e)}")
         
     finally:
-        # Обязательно удаляем временные файлы, чтобы сервер не забился мусором
         if os.path.exists(input_path): os.remove(input_path)
         if os.path.exists(output_path): os.remove(output_path)
 
@@ -123,3 +119,24 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
         return {"success": True, "text": extracted_text.strip()}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OCR Error: {str(e)}")
+
+# --- 4. ПРОФЕССИОНАЛЬНОЕ УДАЛЕНИЕ ФОНА (REMBG AI) ---
+@app.post("/remove-bg")
+async def remove_background(file: UploadFile = File(...)):
+    try:
+        content = await file.read()
+        
+        img = Image.open(io.BytesIO(content))
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+            
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format="PNG")
+        
+        output_bytes = remove(img_bytes.getvalue(), session=rembg_session)
+        
+        return Response(content=output_bytes, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Remove BG Error: {str(e)}")
