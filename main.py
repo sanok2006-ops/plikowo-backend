@@ -13,7 +13,7 @@ from rembg import remove, new_session
 pillow_heif.register_heif_opener()
 pillow_heif.register_avif_opener()
 
-# Легкая и быстрая модель нейросети u2netp (4.7 МБ)
+# Быстрая и компактная нейросеть (4.7 МБ)
 rembg_session = new_session("u2netp")
 
 app = FastAPI(title="Plikowo Micro-Backend")
