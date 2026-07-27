@@ -9,6 +9,7 @@ from PIL import Image, ImageOps
 import pillow_heif
 import pytesseract
 
+# Регистрируем декодер HEIC и AVIF (запасной вариант)
 pillow_heif.register_heif_opener()
 pillow_heif.register_avif_opener()
 
@@ -29,6 +30,7 @@ def home():
 # --- 1. КОНВЕРТАЦИЯ HEIC -> JPG/PNG ---
 @app.post("/convert-heic")
 async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"):
+    # Генерируем уникальное имя файла, чтобы пользователи не мешали друг другу
     file_id = uuid.uuid4().hex
     input_path = f"/tmp/{file_id}_in.heic"
     
@@ -41,9 +43,13 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
         with open(input_path, "wb") as f:
             f.write(content)
         
+        # --- ВАРИАНТ 1: Системная утилита C++ (heif-convert) ---
+        # Идеально переваривает Live Photos, тяжелые слои и новые кодеки Apple
         cmd = ["heif-convert", "-q", "92", input_path, output_path]
         process = subprocess.run(cmd, capture_output=True, text=True)
         
+        # --- ВАРИАНТ 2: Резервный (через Python Pillow) ---
+        # Если системная утилита не помогла, пробуем Python-модуль
         if process.returncode != 0 or not os.path.exists(output_path):
             image = Image.open(input_path)
             try:
@@ -61,6 +67,7 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
                     
             image.save(output_path, format="JPEG" if fmt == "jpg" else "PNG", quality=92)
         
+        # Читаем готовый файл и отдаем пользователю
         with open(output_path, "rb") as f:
             output_bytes = f.read()
             
@@ -70,6 +77,7 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
         raise HTTPException(status_code=400, detail=f"HEIC Conversion Error: {str(e)}")
         
     finally:
+        # Обязательно удаляем временные файлы, чтобы сервер не забился мусором
         if os.path.exists(input_path): os.remove(input_path)
         if os.path.exists(output_path): os.remove(output_path)
 
