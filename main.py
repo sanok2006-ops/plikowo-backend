@@ -8,13 +8,9 @@ from fastapi.responses import Response
 from PIL import Image, ImageOps
 import pillow_heif
 import pytesseract
-from rembg import remove, new_session
 
 pillow_heif.register_heif_opener()
 pillow_heif.register_avif_opener()
-
-# Быстрая и компактная нейросеть (4.7 МБ)
-rembg_session = new_session("u2netp")
 
 app = FastAPI(title="Plikowo Micro-Backend")
 
@@ -119,24 +115,3 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
         return {"success": True, "text": extracted_text.strip()}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OCR Error: {str(e)}")
-
-# --- 4. ПРОФЕССИОНАЛЬНОЕ УДАЛЕНИЕ ФОНА (REMBG AI) ---
-@app.post("/remove-bg")
-async def remove_background(file: UploadFile = File(...)):
-    try:
-        content = await file.read()
-        
-        img = Image.open(io.BytesIO(content))
-        try:
-            img = ImageOps.exif_transpose(img)
-        except Exception:
-            pass
-            
-        img_bytes = io.BytesIO()
-        img.save(img_bytes, format="PNG")
-        
-        output_bytes = remove(img_bytes.getvalue(), session=rembg_session)
-        
-        return Response(content=output_bytes, media_type="image/png")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Remove BG Error: {str(e)}")
