@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Устанавливаем системные утилиты и C++ библиотеки для нейросети
+# Устанавливаем системные утилиты и ВСЕ необходимые C++ зависимости
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     tesseract-ocr \
@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libgl1 \
     libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
