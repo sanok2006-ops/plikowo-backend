@@ -20,9 +20,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Предзагрузка весов нейросети U2-Net в контейнер
-RUN python -c "from rembg import new_session; new_session('u2net')"
-
 COPY . .
 
 EXPOSE 10000
