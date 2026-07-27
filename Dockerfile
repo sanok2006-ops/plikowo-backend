@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Устанавливаем системные утилиты
+# Устанавливаем системные утилиты и C++ библиотеки для нейросети
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     tesseract-ocr \
@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-eng \
     libheif-examples \
     curl \
+    libgomp1 \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -17,7 +20,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Предзагрузка весов нейросети U2-Net
+# Предзагрузка весов нейросети U2-Net в контейнер
 RUN python -c "from rembg import new_session; new_session('u2net')"
 
 COPY . .
