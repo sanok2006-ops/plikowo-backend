@@ -13,8 +13,8 @@ from rembg import remove, new_session
 pillow_heif.register_heif_opener()
 pillow_heif.register_avif_opener()
 
-# Инициализируем сессию нейросети U2-Net
-rembg_session = new_session("u2net")
+# Легкая и быстрая модель нейросети u2netp (4.7 МБ)
+rembg_session = new_session("u2netp")
 
 app = FastAPI(title="Plikowo Micro-Backend")
 
