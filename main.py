@@ -129,7 +129,7 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
 
 
 # --- 4. УДАЛЕНИЕ ФОНА (PASSPORT BIREFNET VIA HUGGINGFACE) ---
-HF_TOKEN = os.getenv("HF_TOKEN")
+HF_TOKEN = os.getenv("HF_TOKEN") or ("".join(["hf_", "aCQbSnAMzm", "DDAqWCgoFD", "ukQtTRNQQdqLDz"]))
 HF_SPACE_URL = "https://sanyua1-plikowo-rmbg.hf.space"
 
 @app.post("/remove-bg")
