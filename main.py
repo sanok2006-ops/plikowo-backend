@@ -1,3 +1,6 @@
+import base64
+import json
+import urllib.request
 import io
 import os
 import subprocess
@@ -123,3 +126,53 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
         return {"success": True, "text": extracted_text.strip()}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OCR Error: {str(e)}")
+
+
+# --- 4. УДАЛЕНИЕ ФОНА (PASSPORT BIREFNET VIA HUGGINGFACE) ---
+HF_TOKEN = os.getenv("HF_TOKEN")
+HF_SPACE_URL = "https://sanyua1-plikowo-rmbg.hf.space"
+
+@app.post("/remove-bg")
+async def remove_background_endpoint(file: UploadFile = File(...)):
+    if not HF_TOKEN:
+        raise HTTPException(status_code=500, detail="HF_TOKEN environment variable not set on server")
+    try:
+        content = await file.read()
+        b64 = "data:image/jpeg;base64," + base64.b64encode(content).decode("ascii")
+        headers = {
+            "Authorization": f"Bearer {HF_TOKEN}",
+            "Content-Type": "application/json",
+            "User-Agent": "PlikowoBackend/1.0"
+        }
+        
+        # 1. Запуск инференса в Gradio
+        post_data = json.dumps({"data": [{"url": b64, "orig_name": "input.jpg"}]}).encode("utf-8")
+        req = urllib.request.Request(f"{HF_SPACE_URL}/gradio_api/call/remove_background", data=post_data, headers=headers)
+        with urllib.request.urlopen(req, timeout=40) as r:
+            event_id = json.loads(r.read().decode("utf-8"))["event_id"]
+            
+        # 2. Ожидание завершения через SSE
+        req_sse = urllib.request.Request(f"{HF_SPACE_URL}/gradio_api/call/remove_background/{event_id}", headers={"Authorization": f"Bearer {HF_TOKEN}"})
+        result_url = None
+        with urllib.request.urlopen(req_sse, timeout=60) as r:
+            for line in r:
+                line_str = line.decode("utf-8").strip()
+                if line_str.startswith("data:"):
+                    sse_json = json.loads(line_str[5:].strip())
+                    if isinstance(sse_json, list) and len(sse_json) > 0 and isinstance(sse_json[0], dict) and "url" in sse_json[0]:
+                        result_url = sse_json[0]["url"]
+                        break
+                        
+        if not result_url:
+            raise HTTPException(status_code=500, detail="No output URL from HF Space")
+            
+        # 3. Скачиваем готовый файл с прозрачным фоном
+        req_file = urllib.request.Request(result_url, headers={"Authorization": f"Bearer {HF_TOKEN}"})
+        with urllib.request.urlopen(req_file, timeout=30) as r:
+            img_bytes = r.read()
+            content_type = r.headers.get("Content-Type", "image/webp")
+            
+        return Response(content=img_bytes, media_type=content_type)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Background removal failed: {str(e)}")
