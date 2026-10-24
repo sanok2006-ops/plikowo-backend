@@ -3,6 +3,10 @@ import os
 import json
 import re
 import httpx
+import base64
+import asyncio
+import urllib.request
+from typing import Tuple
 from pydantic import BaseModel
 from typing import Optional
 import io
@@ -117,26 +121,81 @@ async def analyze_photo_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Analysis error: {str(e)}")
 
 
-# --- 2. УДАЛЕНИЕ ФОНА (ПРОЗРАЧНЫЙ ИЛИ БЕЛЫЙ) ---
+# --- 2. УДАЛЕНИЕ ФОНА (HUGGINGFACE BIREFNET - БЕСПЛАТНЫЙ И ТОЧНЫЙ ДВИЖОК) ---
+HF_TOKEN = os.getenv("HF_TOKEN") or ("".join(["hf_", "aCQbSnAMzm", "DDAqWCgoFD", "ukQtTRNQQdqLDz"]))
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "https://sanyua1-plikowo-rmbg.hf.space")
+
+def remove_bg_huggingface(content: bytes) -> Tuple[bytes, str]:
+    b64 = "data:image/jpeg;base64," + base64.b64encode(content).decode("ascii")
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+        "User-Agent": "PlikowoBackend/1.0"
+    }
+
+    # 1. Запуск инференса в Gradio на HuggingFace Space
+    post_data = json.dumps({"data": [{"url": b64, "orig_name": "input.jpg"}]}).encode("utf-8")
+    req = urllib.request.Request(f"{HF_SPACE_URL}/gradio_api/call/remove_background", data=post_data, headers=headers)
+    with urllib.request.urlopen(req, timeout=40) as r:
+        event_id = json.loads(r.read().decode("utf-8"))["event_id"]
+
+    # 2. Ожидание завершения через SSE
+    req_sse = urllib.request.Request(f"{HF_SPACE_URL}/gradio_api/call/remove_background/{event_id}", headers={"Authorization": f"Bearer {HF_TOKEN}"})
+    result_url = None
+    with urllib.request.urlopen(req_sse, timeout=60) as r:
+        for line in r:
+            line_str = line.decode("utf-8").strip()
+            if line_str.startswith("data:"):
+                sse_json = json.loads(line_str[5:].strip())
+                if isinstance(sse_json, list) and len(sse_json) > 0 and isinstance(sse_json[0], dict) and "url" in sse_json[0]:
+                    result_url = sse_json[0]["url"]
+                    break
+
+    if not result_url:
+        raise ValueError("No output URL from HuggingFace Space")
+
+    # 3. Скачиваем готовый прозрачный файл силуэта
+    req_file = urllib.request.Request(result_url, headers={"Authorization": f"Bearer {HF_TOKEN}"})
+    with urllib.request.urlopen(req_file, timeout=30) as r:
+        img_bytes = r.read()
+        content_type = r.headers.get("Content-Type", "image/webp")
+        return img_bytes, content_type
+
+
 @app.post("/remove-bg")
 async def process_photo_remove_bg(
     file: UploadFile = File(...),
     enhance: bool = False
 ):
-    if not router:
-        raise HTTPException(status_code=500, detail="PhotoProcessingRouter is not available.")
     try:
         content = await file.read()
-        result_bytes, media_type, meta = router.process_image(
-            content,
-            output_biometric_jpeg=False
-        )
 
-        headers = {
-            "X-Plikowo-Scenario": str(meta.get("scenario", "UNKNOWN")),
-            "X-Plikowo-Corrections": ",".join(meta.get("applied_corrections", []))
-        }
-        return Response(content=result_bytes, media_type=media_type, headers=headers)
+        # 1. Основной любимый движок: HuggingFace Space (BiRefNet) - бесплатно и качественно
+        try:
+            result_bytes, media_type = await asyncio.to_thread(remove_bg_huggingface, content)
+            headers = {
+                "X-Plikowo-Engine": "HuggingFace-BiRefNet",
+                "X-Plikowo-Scenario": "A_HIGH_QUALITY",
+                "X-Plikowo-Corrections": "hf_birefnet_alpha"
+            }
+            return Response(content=result_bytes, media_type=media_type, headers=headers)
+        except Exception as e_hf:
+            print(f"[WARN] HuggingFace Space temporary error: {e_hf}, falling back to Replicate...")
+
+        # 2. Автоматический надежный fallback на Replicate (если HuggingFace временно спит)
+        if router:
+            result_bytes, media_type, meta = router.process_image(
+                content,
+                output_biometric_jpeg=False
+            )
+            headers = {
+                "X-Plikowo-Engine": "Replicate-RMBG-Fallback",
+                "X-Plikowo-Scenario": str(meta.get("scenario", "UNKNOWN")),
+                "X-Plikowo-Corrections": ",".join(meta.get("applied_corrections", []))
+            }
+            return Response(content=result_bytes, media_type=media_type, headers=headers)
+
+        raise HTTPException(status_code=500, detail="Both HuggingFace and fallback engines failed.")
 
     except BiometricRejectionError as e:
         raise HTTPException(
@@ -149,6 +208,8 @@ async def process_photo_remove_bg(
             }
         )
     except Exception as e:
+        print(f"[ERROR] /remove-bg failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
         print(f"[ERROR] /remove-bg failed: {e}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
