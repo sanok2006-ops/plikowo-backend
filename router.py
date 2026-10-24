@@ -20,16 +20,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-try:
-    from analyzer import PhotoAnalyzer, Scenario
-    from corrections import correct_white_balance, adaptive_light_correction, denoise_skin_preserving, apply_studio_postprocessing
-    from qa_gate import QualityAssuranceGate
-    from biometrics import generate_mos_biometric_photo, crop_and_resize_to_biometric_standard
-except ImportError:
-    from .analyzer import PhotoAnalyzer, Scenario
-    from .corrections import correct_white_balance, adaptive_light_correction, denoise_skin_preserving, apply_studio_postprocessing
-    from .qa_gate import QualityAssuranceGate
-    from .biometrics import generate_mos_biometric_photo, crop_and_resize_to_biometric_standard
+import sys
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from analyzer import PhotoAnalyzer, Scenario
+from corrections import correct_white_balance, adaptive_light_correction, denoise_skin_preserving, apply_studio_postprocessing
+from qa_gate import QualityAssuranceGate
+from biometrics import generate_mos_biometric_photo, crop_and_resize_to_biometric_standard
 
 TEMP_DIR = tempfile.gettempdir()
 

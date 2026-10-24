@@ -320,24 +320,29 @@ async def verify_photo_endpoint(req: VerifyPhotoRequest):
         raw_b64 = raw_b64.split(",", 1)[1]
 
     if req.stage == "final":
-        prompt = """You are an official biometrics compliance inspector for Polish Residence Cards (Karta Pobytu) and official MOS digital photo system (35x45 mm, 684x883 px).
-Evaluate this FINISHED, processed biometric passport photograph (already formatted with white background and centered face) strictly according to official Polish statutory and EU ICAO biometric criteria.
+        prompt = """You are a strict Polish biometric passport compliance officer inspecting a final, formatted photograph for Polish Residence Cards (Karta Pobytu) and official MOS digital photo system (35x45 mm, 684x883 px).
 
-PAY SPECIAL ATTENTION TO OVERALL PHOTO QUALITY AND CLARITY:
-1. PHOTO QUALITY, SHARPNESS & DETAILS (CRITICAL):
-   - The person's face in the final image MUST be sharp, clear, and high-definition.
-   - Eyes, pupils, eyebrows, lips, and facial contours must be crisp and in sharp focus.
-   - REJECT IF: final photo is blurry, soft/smudged, pixelated, blocky from compression, or has poor quality unsuitable for 300 DPI official biometric printing (35x45 mm) and MOS upload.
-2. CUTOUT & BACKGROUND QUALITY:
-   - Background MUST be clean, solid, uniform light/white without dark spots, noise, or halos.
-   - Edges of hair, ears, shoulders, and chin must be clean, natural, and NOT cut off or jaggedly eroded.
-3. CENTERING & BIOMETRIC PROPORTIONS:
-   - Face must be well-centered, frontal en-face, upright within the 35x45 mm frame.
+Perform an exacting inspection of this finished biometric photograph according to official Polish statutory and EU ICAO criteria.
+
+CRITICAL REJECTION RULES (Check each carefully):
+1. SOLID WHITE BACKGROUND & CUTOUT INTEGRITY (STRICT):
+   - Background MUST be uniform, pure solid white without any natural room background, textures, shadows, or gradients.
+   - REJECT IF: Natural photo background is NOT removed (e.g. wall, room, door, window, outdoor background is visible). Reason PL: "Tło nie zostało usunięte na jednolity biały kolor." / UA: "Фон не видалено на суцільний білий колір."
+   - REJECT IF: Background removal left noticeable cutout artifacts, jagged/choppy edges around hair or clothing, dark halos/fringes, blurred contours, or eroded parts of the head/ears/shoulders.
+2. FRAME FILLING & BIOMETRIC PROPORTIONS (70% - 80% RULE):
+   - The head (from top of hair crown to bottom tip of chin) MUST occupy between 70% and 80% of the total vertical height of the 35x45 mm frame.
+   - Crown of the hair/head MUST be positioned near the top guideline (~7% margin from the top border).
+   - Chin MUST be positioned near the bottom guideline (~87% from top, ~13% margin from bottom border).
+   - REJECT IF: Head is too small (e.g. less than 70% height, person looks far away with a large empty gap above the head or crown sits far below the top line). Reason PL: "Twarz zajmuje zbyt małą część kadru (wymagane 70-80% wysokości zdjęcia)." / UA: "Обличчя займає замалу частину кадру (вимагається 70-80% висоти фото)."
+   - REJECT IF: Head is too large (crown or chin cut off by the borders, overflowing the frame). Reason PL: "Głowa jest obcięta krawędzią kadru." / UA: "Голова обрізана краєм кадру."
+3. PHOTO QUALITY, SHARPNESS & RESOLUTION:
+   - The image must be sharp, in crisp focus, with natural skin texture and clear facial features (eyes, lashes, lips, facial contours).
+   - REJECT IF: Blurry, out of focus, motion-blurred, pixelated, heavily compressed, or low-resolution. Reason PL: "Zdjęcie jest nieostre lub ma zbyt niską jakość." / UA: "Фото нечітке або має занизьку якість."
 4. FACIAL COMPLIANCE:
-   - Eyes open and looking forward, mouth closed with neutral expression.
+   - Frontal view (en-face), eyes open and looking straight into camera, mouth completely closed, neutral expression (no smiling or frowning).
 
-If the processed photo has excellent quality and satisfies ALL biometric requirements, set "valid": true and "high_quality": true.
-If the processed photo fails ANY criterion (especially if quality is poor, blurry, or low-res), set "valid": false and "high_quality": false with polite clear explanation in "rejection_reason_pl" and "rejection_reason_ua".
+If the photograph meets ALL standards with high quality, output "valid": true and "high_quality": true.
+If the photograph fails ANY of the rules above, output "valid": false and "high_quality": false with a clear, polite explanation in Polish ("rejection_reason_pl") and Ukrainian ("rejection_reason_ua").
 
 Respond ONLY with valid JSON:
 {
