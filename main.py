@@ -71,8 +71,22 @@ app.add_middleware(
 )
 
 TEMP_DIR = tempfile.gettempdir()
-router = PhotoProcessingRouter() if PhotoProcessingRouter else None
-analyzer = PhotoAnalyzer() if PhotoAnalyzer else None
+router = None
+analyzer = None
+
+try:
+    if PhotoAnalyzer:
+        analyzer = PhotoAnalyzer()
+except Exception as e:
+    print(f"[WARN] analyzer instance init failed: {e}")
+    ANALYZER_IMPORT_ERROR = str(e)
+
+try:
+    if PhotoProcessingRouter:
+        router = PhotoProcessingRouter()
+except Exception as e:
+    print(f"[WARN] router instance init failed: {e}")
+    ROUTER_IMPORT_ERROR = str(e)
 
 
 @app.get("/")

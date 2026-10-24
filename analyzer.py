@@ -30,10 +30,19 @@ class Scenario(str, Enum):
 
 class PhotoAnalyzer:
     def __init__(self):
-        # Загружаем каскады Хаара для детекции лица и глаз
-        cascade_dir = cv2.data.haarcascades
-        self.face_cascade = cv2.CascadeClassifier(cascade_dir + "haarcascade_frontalface_default.xml")
-        self.eye_cascade = cv2.CascadeClassifier(cascade_dir + "haarcascade_eye.xml")
+        # Загружаем каскады Хаара для детекции лица и глаз (безопасно с защитой от сбоев)
+        self.face_cascade = None
+        self.eye_cascade = None
+        try:
+            cascade_dir = getattr(getattr(cv2, "data", None), "haarcascades", "")
+            cls = getattr(cv2, "CascadeClassifier", None)
+            if not cls and hasattr(cv2, "objdetect"):
+                cls = getattr(cv2.objdetect, "CascadeClassifier", None)
+            if cls and cascade_dir:
+                self.face_cascade = cls(cascade_dir + "haarcascade_frontalface_default.xml")
+                self.eye_cascade = cls(cascade_dir + "haarcascade_eye.xml")
+        except Exception as e_casc:
+            print(f"[WARN] CascadeClassifier init skipped: {e_casc}")
 
     def pil_to_cv2(self, pil_img: Image.Image) -> np.ndarray:
         """Конвертирует PIL Image в BGR NumPy массив OpenCV с учетом EXIF."""
@@ -91,14 +100,20 @@ class PhotoAnalyzer:
         noise_residual = np.abs(gray.astype(np.float32) - blurred.astype(np.float32))
         noise_level = float(np.mean(noise_residual))
 
-        # 6. Детекция лица и глаз
+        # 6. Детекция лица и глаз (с проверкой наличия каскадов)
         min_face_dim = max(60, int(min(w, h) * 0.10))
-        detected_faces = self.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=4,
-            minSize=(min_face_dim, min_face_dim)
-        )
+        detected_faces = ()
+        if self.face_cascade is not None:
+            try:
+                detected_faces = self.face_cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=4,
+                    minSize=(min_face_dim, min_face_dim)
+                )
+            except Exception as e_f:
+                print(f"[WARN] Face detection error: {e_f}")
+                detected_faces = ()
 
         face_count = len(detected_faces)
         face_info: Optional[Dict[str, Any]] = None
@@ -128,7 +143,12 @@ class PhotoAnalyzer:
 
             # Проверяем глаза внутри области лица
             face_upper = face_crop_gray[:int(fh * 0.65), :]
-            eyes = self.eye_cascade.detectMultiScale(face_upper, scaleFactor=1.1, minNeighbors=3, minSize=(15, 15))
+            eyes = ()
+            if self.eye_cascade is not None:
+                try:
+                    eyes = self.eye_cascade.detectMultiScale(face_upper, scaleFactor=1.1, minNeighbors=3, minSize=(15, 15))
+                except Exception:
+                    eyes = ()
             eye_count = len(eyes)
 
             # Проверяем наклон (если обнаружено ровно 2 глаза)
