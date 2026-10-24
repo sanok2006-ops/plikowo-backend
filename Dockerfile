@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Установка системных зависимостей: LibreOffice, OCR (Tesseract) и системные библиотеки для OpenCV
+# Установка системных зависимостей: LibreOffice, OCR (Tesseract) и системные библиотеки для OpenCV и HEIF
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     tesseract-ocr \
@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-eng \
     libgl1 \
     libglib2.0-0 \
+    libheif-examples \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

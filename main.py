@@ -13,6 +13,7 @@ import io
 import subprocess
 import tempfile
 import uuid
+import shutil
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -246,43 +247,68 @@ async def process_biometric_mos(file: UploadFile = File(...)):
 # --- 4. КОНВЕРТАЦИЯ HEIC -> JPG/PNG ---
 @app.post("/convert-heic")
 async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"):
+    fmt = "jpg" if target_format.lower() in ["jpg", "jpeg"] else "png"
+    mime = "image/jpeg" if fmt == "jpg" else "image/png"
     file_id = uuid.uuid4().hex
     input_path = os.path.join(TEMP_DIR, f"{file_id}_in.heic")
-    fmt = "jpg" if target_format.lower() in ["jpg", "jpeg"] else "png"
     output_path = os.path.join(TEMP_DIR, f"{file_id}_out.{fmt}")
-    mime = "image/jpeg" if fmt == "jpg" else "image/png"
 
     try:
         content = await file.read()
-        with open(input_path, "wb") as f:
-            f.write(content)
+        if not content:
+            raise ValueError("Przesłano pusty plik.")
 
-        # Вариант 1: утилита heif-convert (Linux)
-        cmd = ["heif-convert", "-q", "92", input_path, output_path]
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        image = None
 
-        # Вариант 2: Pillow fallback
-        if process.returncode != 0 or not os.path.exists(output_path):
+        # Способ 1: Прямое декодирование в памяти через Pillow + pillow_heif
+        try:
+            image = Image.open(io.BytesIO(content))
+            image.load()
+        except Exception:
+            # Если прямой поток не распознан, сохраняем во временный файл
+            with open(input_path, "wb") as f:
+                f.write(content)
+
+            # Способ 2: heif-convert (только если утилита реально установлена в системе)
+            if shutil.which("heif-convert"):
+                try:
+                    cmd = ["heif-convert", "-q", "92", input_path, output_path]
+                    process = subprocess.run(cmd, capture_output=True, text=True)
+                    if process.returncode == 0 and os.path.exists(output_path):
+                        with open(output_path, "rb") as f:
+                            return Response(content=f.read(), media_type=mime)
+                except Exception:
+                    pass
+
+            # Способ 3: Открытие файла через Pillow
             image = Image.open(input_path)
-            try:
-                image = ImageOps.exif_transpose(image)
-            except Exception:
-                pass
+            image.load()
 
-            if fmt == "jpg" and image.mode != "RGB":
+        if image is None:
+            raise ValueError("Nie udało się odczytać formatu HEIC/HEIF.")
+
+        # Автоматический поворот по EXIF ориентации
+        try:
+            image = ImageOps.exif_transpose(image)
+        except Exception:
+            pass
+
+        # Конвертация цветового пространства
+        if fmt == "jpg":
+            if image.mode != "RGB":
                 if image.mode in ("RGBA", "LA", "P"):
                     background = Image.new("RGB", image.size, (255, 255, 255))
                     background.paste(image, mask=image.split()[-1] if image.mode == "RGBA" else None)
                     image = background
                 else:
                     image = image.convert("RGB")
+        elif fmt == "png" and image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGBA")
 
-            image.save(output_path, format="JPEG" if fmt == "jpg" else "PNG", quality=92)
-
-        with open(output_path, "rb") as f:
-            output_bytes = f.read()
-
-        return Response(content=output_bytes, media_type=mime)
+        # Сохранение в память
+        out_buf = io.BytesIO()
+        image.save(out_buf, format="JPEG" if fmt == "jpg" else "PNG", quality=92)
+        return Response(content=out_buf.getvalue(), media_type=mime)
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"HEIC Conversion Error: {str(e)}")
