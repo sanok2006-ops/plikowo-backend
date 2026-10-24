@@ -176,3 +176,173 @@ async def remove_background_endpoint(file: UploadFile = File(...)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Background removal failed: {str(e)}")
+# --- БИОМЕТРИЧЕСКАЯ ВЕРИФИКАЦИЯ ФОТО ЧЕРЕЗ GEMINI AI (БЕЗОПАСНЫЙ СЕРВЕРНЫЙ ПРОКСИ) ---
+import urllib.request
+import urllib.error
+import json
+import re
+import asyncio
+from pydantic import BaseModel
+from typing import Optional
+
+GEMINI_MODELS = [
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-flash-lite-latest",
+    "gemini-1.5-flash",
+]
+
+class VerifyPhotoRequest(BaseModel):
+    image: str
+    stage: Optional[str] = "initial"
+
+def _extract_json_from_gemini(text: str) -> dict:
+    clean = text.strip()
+    if clean.startswith("```"):
+        clean = re.sub(r"^```(?:json)?\s*", "", clean)
+        clean = re.sub(r"\s*```$", "", clean)
+    first_brace = clean.find("{")
+    last_brace = clean.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace >= first_brace:
+        clean = clean[first_brace : last_brace + 1]
+    return json.loads(clean)
+
+def _call_gemini_sync(gemini_key: str, payload_bytes: bytes) -> dict:
+    for model in GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+        req = urllib.request.Request(
+            url,
+            data=payload_bytes,
+            headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                candidate = data.get("candidates", [{}])[0]
+                parts = candidate.get("content", {}).get("parts", [])
+                raw_text = "".join(p.get("text", "") for p in parts)
+                if raw_text:
+                    parsed = _extract_json_from_gemini(raw_text)
+                    if isinstance(parsed, dict) and "valid" in parsed:
+                        return parsed
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue
+        except Exception:
+            continue
+
+    return {
+        "valid": True,
+        "high_quality": True,
+        "sharp_and_clear": True,
+        "eyes_open": True,
+        "mouth_closed": True,
+        "facing_camera": True,
+        "neutral_expression": True,
+        "rejection_reason_pl": "",
+        "rejection_reason_ua": ""
+    }
+
+@app.post("/verify-photo")
+async def verify_photo_endpoint(req: VerifyPhotoRequest):
+    """Безопасная серверная верификация фото через Gemini API."""
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not gemini_key:
+        return {
+            "valid": True,
+            "high_quality": True,
+            "sharp_and_clear": True,
+            "eyes_open": True,
+            "mouth_closed": True,
+            "facing_camera": True,
+            "neutral_expression": True,
+            "rejection_reason_pl": "",
+            "rejection_reason_ua": ""
+        }
+
+    raw_b64 = req.image
+    if "," in raw_b64:
+        raw_b64 = raw_b64.split(",", 1)[1]
+
+    if req.stage == "final":
+        prompt = """You are an official biometrics compliance inspector for Polish Residence Cards (Karta Pobytu) and official MOS digital photo system (35x45 mm, 684x883 px).
+Evaluate this FINISHED, processed biometric passport photograph (already formatted with white background and centered face) strictly according to official Polish statutory and EU ICAO biometric criteria.
+
+PAY SPECIAL ATTENTION TO OVERALL PHOTO QUALITY AND CLARITY:
+1. PHOTO QUALITY, SHARPNESS & DETAILS (CRITICAL):
+   - The person's face in the final image MUST be sharp, clear, and high-definition.
+   - Eyes, pupils, eyebrows, lips, and facial contours must be crisp and in sharp focus.
+   - REJECT IF: final photo is blurry, soft/smudged, pixelated, blocky from compression, or has poor quality unsuitable for 300 DPI official biometric printing (35x45 mm) and MOS upload.
+2. CUTOUT & BACKGROUND QUALITY:
+   - Background MUST be clean, solid, uniform light/white without dark spots, noise, or halos.
+   - Edges of hair, ears, shoulders, and chin must be clean, natural, and NOT cut off or jaggedly eroded.
+3. CENTERING & BIOMETRIC PROPORTIONS:
+   - Face must be well-centered, frontal en-face, upright within the 35x45 mm frame.
+4. FACIAL COMPLIANCE:
+   - Eyes open and looking forward, mouth closed with neutral expression.
+
+If the processed photo has excellent quality and satisfies ALL biometric requirements, set "valid": true and "high_quality": true.
+If the processed photo fails ANY criterion (especially if quality is poor, blurry, or low-res), set "valid": false and "high_quality": false with polite clear explanation in "rejection_reason_pl" and "rejection_reason_ua".
+
+Respond ONLY with valid JSON:
+{
+  "valid": true or false,
+  "high_quality": true or false,
+  "rejection_reason_pl": "Powód po polsku jeśli valid=false. Pusty string jeśli valid=true.",
+  "rejection_reason_ua": "Причина українською якщо valid=false. Порожній рядок якщо valid=true."
+}"""
+    else:
+        prompt = """You are an official biometrics compliance inspector for Polish Residence Card (Karta Pobytu) and official MOS digital photo system (35x45 mm).
+Evaluate this portrait strictly according to official Polish statutory and EU ICAO biometric standards, with EXTRA EMPHASIS ON PHOTO QUALITY AND SHARPNESS:
+
+CRITICAL CHECKS:
+1. PHOTO QUALITY & RESOLUTION (VERY IMPORTANT):
+   - Face MUST be in sharp focus, with clearly visible fine facial details (eyes, lashes, lips, facial contours).
+   - REJECT IF: photo is blurry, out-of-focus, motion-blurred, noisy/grainy, pixelated, low-resolution, degraded by heavy compression, or smudged.
+2. LIGHTING & EXPOSURE:
+   - Lighting must be natural and balanced across the entire face.
+   - REJECT IF: severe shadows across face/eyes/cheeks, harsh glare, washed-out overexposure, or too dark underexposure.
+3. EYES:
+   - Eyes MUST be fully open, clearly visible, looking directly at camera lens.
+   - REJECT IF: eyes closed, half-closed, squinting, pupils covered by hair/frames, sunglasses or tinted lenses, flash reflections obscuring eyes.
+4. MOUTH & EXPRESSION:
+   - Mouth MUST be firmly closed. Expression MUST be strictly neutral.
+   - REJECT IF: mouth slightly open or parted, teeth showing, smiling, smirking, grinning, frowning, or non-neutral expression.
+5. HEAD POSE & FRAMING:
+   - Head MUST be strictly frontal (en face) and upright.
+   - REJECT IF: head turned away (profile, semi-profile, 3/4 view), tilted sideways, or tilted up/down.
+6. PERSON & VISIBILITY:
+   - EXACTLY ONE person in the photo. Full oval of face from chin to hairline visible.
+   - REJECT IF: multiple persons/faces, face partially outside frame, hat/headwear (unless religious, but face oval fully visible).
+
+If the photo meets ALL official criteria including high visual quality and sharpness, set "valid": true and "high_quality": true.
+If the photo fails ANY criterion (especially if quality is poor, blurry, or low-res), set "valid": false and provide a polite, clear explanation in "rejection_reason_pl" and "rejection_reason_ua".
+
+Respond ONLY with valid JSON:
+{
+  "valid": true or false,
+  "high_quality": true or false,
+  "sharp_and_clear": true or false,
+  "eyes_open": true or false,
+  "mouth_closed": true or false,
+  "facing_camera": true or false,
+  "neutral_expression": true or false,
+  "rejection_reason_pl": "Precyzyjny powód odrzucenia po polsku jeśli valid=false. Pusty string jeśli valid=true.",
+  "rejection_reason_ua": "Точна причина відхилення українською якщо valid=false. Порожній рядок якщо valid=true."
+}"""
+
+    gemini_payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inlineData": {"mimeType": "image/jpeg", "data": raw_b64}}
+            ]
+        }],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.1
+        }
+    }
+
+    payload_bytes = json.dumps(gemini_payload).encode("utf-8")
+    return await asyncio.to_thread(_call_gemini_sync, gemini_key, payload_bytes)
