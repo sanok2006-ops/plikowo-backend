@@ -21,10 +21,10 @@ except ImportError:
     from .analyzer import PhotoAnalyzer
     from .router import PhotoProcessingRouter, BiometricRejectionError
 
-# Загружаем переменные из .env если файл существует
+# Загрузка переменных окружения из .env
 load_dotenv()
 
-# Регистрируем декодер HEIC и AVIF (если установлен)
+# Поддержка форматов HEIC и AVIF
 try:
     import pillow_heif
     pillow_heif.register_heif_opener()
@@ -39,7 +39,7 @@ except ImportError:
 
 app = FastAPI(
     title="Plikowo AI Passport & Document Photo Engine",
-    description="Автоматический интеллектуальный процессинг фото на документы (MOS / Karta Pobytu / ICAO) без кукольных артефактов."
+    description="Автоматический интеллектуальный сервер фото на документы (MOS / Karta Pobytu / ICAO) и конвертации файлов."
 )
 
 app.add_middleware(
@@ -66,13 +66,12 @@ def home():
     }
 
 
-# --- 1. АВТОМАТИЧЕСКИЙ ЛОКАЛЬНЫЙ АНАЛИЗАТОР (~15 мс, $0) ---
+# --- 1. АНАЛИЗ ФОТО (~15 мс, $0) ---
 @app.post("/analyze-photo")
 async def analyze_photo_endpoint(file: UploadFile = File(...)):
     """
-    Мгновенный локальный анализ фото средствами компьютерного зрения:
-    резкость, экспозиция, баланс белого, шум, геометрия лица и биометрическая пригодность.
-    Не тратит платные запросы к Replicate!
+    Быстрый локальный анализ фото:
+    резкость, экспозиция, фон, лицо и базовая биометрия.
     """
     try:
         content = await file.read()
@@ -82,18 +81,17 @@ async def analyze_photo_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Analysis error: {str(e)}")
 
 
-# --- 2. ГЛАВНЫЙ ЭНДПОИНТ ОБРАБОТКИ ФОТО НА ДОКУМЕНТЫ (ИНТЕЛЛЕКТУАЛЬНЫЙ МАРШРУТИЗАТОР) ---
+# --- 2. УДАЛЕНИЕ ФОНА (ПРОЗРАЧНЫЙ ИЛИ БЕЛЫЙ) ---
 @app.post("/remove-bg")
 async def process_photo_remove_bg(
     file: UploadFile = File(...),
     enhance: bool = False
 ):
     """
-    Повністю автоматична салонна обробка фото за біометричним стандартом:
-    1. Локальна перевірка якості та пропорцій 35х45 мм (684x883 px).
-    2. Сегментація силуету через Replicate RMBG (bria/remove-background).
-    3. Локальне накладання суцільно чисто білого фону (RGB 255, 255, 255) в Pillow.
-    4. Збереження природної теплоти та фактури шкіри без спотворень.
+    Удаление фона и подготовка фото:
+    1. Обрезка под биометрический кадр 35x45 мм (684x883 px).
+    2. Удаление фона через Replicate RMBG (bria/remove-background).
+    3. Добавление белого фона (RGB 255, 255, 255).
     """
     try:
         content = await file.read()
@@ -109,12 +107,11 @@ async def process_photo_remove_bg(
         return Response(content=result_bytes, media_type=media_type, headers=headers)
 
     except BiometricRejectionError as e:
-        # Безопасный отказ при непригодном фото (без фантазий нейросети)
         raise HTTPException(
             status_code=422,
             detail={
                 "status": "rejected",
-                "message": e.reasons[0].get("ru", "Фото не подходит для документов") if e.reasons else "Rejection",
+                "message": e.reasons[0].get("ru", "Фото не подходит") if e.reasons else "Rejection",
                 "reasons": e.reasons,
                 "analysis": e.analysis
             }
@@ -124,12 +121,12 @@ async def process_photo_remove_bg(
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 
-# --- 3. ГОТОВОЕ БИОМЕТРИЧЕСКОЕ ФОТО ДЛЯ MOS / KARTA POBYTU (35x45 мм, 684x883 px) ---
+# --- 3. БИОМЕТРИЧЕСКОЕ ФОТО ДЛЯ MOS / KARTA POBYTU (35x45 мм, 684x883 px) ---
 @app.post("/biometric-mos-photo")
 async def process_biometric_mos(file: UploadFile = File(...)):
     """
-    Возвращает готовый файл JPEG 35x45 мм (684x883 px) на чисто белом фоне (RGB 255, 255, 255)
-    со строгим соблюдением биометрических пропорций MOS (высота головы 70-80%).
+    Выходной официальный файл JPEG 35x45 мм (684x883 px) на чистом белом фоне (RGB 255, 255, 255)
+    строго по стандартам MOS (высота головы 70-80%).
     """
     try:
         content = await file.read()
@@ -167,7 +164,7 @@ async def convert_heic(file: UploadFile = File(...), target_format: str = "jpeg"
         with open(input_path, "wb") as f:
             f.write(content)
 
-        # Вариант 1: Системная утилита heif-convert (Linux)
+        # Вариант 1: утилита heif-convert (Linux)
         cmd = ["heif-convert", "-q", "92", input_path, output_path]
         process = subprocess.run(cmd, capture_output=True, text=True)
 
