@@ -1,10 +1,11 @@
+import sys
+import os
 import json
 import re
 import httpx
 from pydantic import BaseModel
 from typing import Optional
 import io
-import os
 import subprocess
 import tempfile
 import uuid
@@ -14,12 +15,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image, ImageOps
 
+# Гарантируем, что текущая папка всегда в sys.path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+# Безопасный импорт анализатора и роутера без относительных путей
 try:
     from analyzer import PhotoAnalyzer
+except Exception as e:
+    print(f"[WARN] analyzer import failed: {e}")
+    PhotoAnalyzer = None
+
+try:
     from router import PhotoProcessingRouter, BiometricRejectionError
-except ImportError:
-    from .analyzer import PhotoAnalyzer
-    from .router import PhotoProcessingRouter, BiometricRejectionError
+except Exception as e:
+    print(f"[WARN] router import failed: {e}")
+    PhotoProcessingRouter = None
+    class BiometricRejectionError(Exception):
+        pass
 
 # Загрузка переменных окружения из .env
 load_dotenv()
@@ -52,8 +66,8 @@ app.add_middleware(
 )
 
 TEMP_DIR = tempfile.gettempdir()
-router = PhotoProcessingRouter()
-analyzer = PhotoAnalyzer()
+router = PhotoProcessingRouter() if PhotoProcessingRouter else None
+analyzer = PhotoAnalyzer() if PhotoAnalyzer else None
 
 
 @app.get("/")
@@ -69,10 +83,8 @@ def home():
 # --- 1. АНАЛИЗ ФОТО (~15 мс, $0) ---
 @app.post("/analyze-photo")
 async def analyze_photo_endpoint(file: UploadFile = File(...)):
-    """
-    Быстрый локальный анализ фото:
-    резкость, экспозиция, фон, лицо и базовая биометрия.
-    """
+    if not analyzer:
+        raise HTTPException(status_code=500, detail="PhotoAnalyzer is not available.")
     try:
         content = await file.read()
         res = analyzer.analyze_bytes(content)
@@ -87,12 +99,8 @@ async def process_photo_remove_bg(
     file: UploadFile = File(...),
     enhance: bool = False
 ):
-    """
-    Удаление фона и подготовка фото:
-    1. Обрезка под биометрический кадр 35x45 мм (684x883 px).
-    2. Удаление фона через Replicate RMBG (bria/remove-background).
-    3. Добавление белого фона (RGB 255, 255, 255).
-    """
+    if not router:
+        raise HTTPException(status_code=500, detail="PhotoProcessingRouter is not available.")
     try:
         content = await file.read()
         result_bytes, media_type, meta = router.process_image(
@@ -111,9 +119,9 @@ async def process_photo_remove_bg(
             status_code=422,
             detail={
                 "status": "rejected",
-                "message": e.reasons[0].get("ru", "Фото не подходит") if e.reasons else "Rejection",
-                "reasons": e.reasons,
-                "analysis": e.analysis
+                "message": getattr(e, "reasons", [{}])[0].get("ru", "Фото не подходит") if getattr(e, "reasons", None) else "Rejection",
+                "reasons": getattr(e, "reasons", []),
+                "analysis": getattr(e, "analysis", {})
             }
         )
     except Exception as e:
@@ -124,10 +132,8 @@ async def process_photo_remove_bg(
 # --- 3. БИОМЕТРИЧЕСКОЕ ФОТО ДЛЯ MOS / KARTA POBYTU (35x45 мм, 684x883 px) ---
 @app.post("/biometric-mos-photo")
 async def process_biometric_mos(file: UploadFile = File(...)):
-    """
-    Выходной официальный файл JPEG 35x45 мм (684x883 px) на чистом белом фоне (RGB 255, 255, 255)
-    строго по стандартам MOS (высота головы 70-80%).
-    """
+    if not router:
+        raise HTTPException(status_code=500, detail="PhotoProcessingRouter is not available.")
     try:
         content = await file.read()
         result_bytes, media_type, meta = router.process_image(content, output_biometric_jpeg=True)
@@ -141,9 +147,9 @@ async def process_biometric_mos(file: UploadFile = File(...)):
             status_code=422,
             detail={
                 "status": "rejected",
-                "message": e.reasons[0].get("ru", "Фото не подходит") if e.reasons else "Rejection",
-                "reasons": e.reasons,
-                "analysis": e.analysis
+                "message": getattr(e, "reasons", [{}])[0].get("ru", "Фото не подходит") if getattr(e, "reasons", None) else "Rejection",
+                "reasons": getattr(e, "reasons", []),
+                "analysis": getattr(e, "analysis", {})
             }
         )
     except Exception as e:
