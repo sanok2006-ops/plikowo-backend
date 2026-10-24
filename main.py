@@ -20,16 +20,21 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+ANALYZER_IMPORT_ERROR = None
+ROUTER_IMPORT_ERROR = None
+
 # Безопасный импорт анализатора и роутера без относительных путей
 try:
     from analyzer import PhotoAnalyzer
 except Exception as e:
+    ANALYZER_IMPORT_ERROR = str(e)
     print(f"[WARN] analyzer import failed: {e}")
     PhotoAnalyzer = None
 
 try:
     from router import PhotoProcessingRouter, BiometricRejectionError
 except Exception as e:
+    ROUTER_IMPORT_ERROR = str(e)
     print(f"[WARN] router import failed: {e}")
     PhotoProcessingRouter = None
     class BiometricRejectionError(Exception):
@@ -75,6 +80,11 @@ def home():
     return {
         "status": "ok",
         "service": "Plikowo AI Photo Engine",
+        "version": "v72-qa",
+        "router_available": router is not None,
+        "router_error": ROUTER_IMPORT_ERROR,
+        "analyzer_available": analyzer is not None,
+        "analyzer_error": ANALYZER_IMPORT_ERROR,
         "quality_profile": "MOS Foto Pro (Anti-Wax/Anti-Doll)",
         "features": ["local_cv_analysis", "adaptive_router", "nightmareai/real-esrgan", "briaai/rmbg-1.4", "qa_gate", "mos_35x45"]
     }
