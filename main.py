@@ -142,11 +142,13 @@ def remove_bg_huggingface(content: bytes) -> Tuple[bytes, str]:
     # 2. Ожидание завершения через SSE
     req_sse = urllib.request.Request(f"{HF_SPACE_URL}/gradio_api/call/remove_background/{event_id}", headers={"Authorization": f"Bearer {HF_TOKEN}"})
     result_url = None
-    with urllib.request.urlopen(req_sse, timeout=60) as r:
+    with urllib.request.urlopen(req_sse, timeout=40) as r:
         for line in r:
             line_str = line.decode("utf-8").strip()
             if line_str.startswith("data:"):
                 sse_json = json.loads(line_str[5:].strip())
+                if isinstance(sse_json, dict) and "error" in sse_json:
+                    raise RuntimeError(f"HuggingFace Space error: {sse_json['error']}")
                 if isinstance(sse_json, list) and len(sse_json) > 0 and isinstance(sse_json[0], dict) and "url" in sse_json[0]:
                     result_url = sse_json[0]["url"]
                     break
@@ -408,16 +410,21 @@ async def verify_photo_endpoint(req: VerifyPhotoRequest):
         prompt = """You are an official compliance inspector for Polish Residence Cards (Karta Pobytu) and official MOS digital photo system (35x45 mm, 684x883 px).
 Evaluate this finished, processed biometric passport photograph strictly according to official Polish statutory and EU ICAO biometric criteria.
 
+IMPORTANT CONTEXT ON POLISH BIOMETRIC STANDARDS:
+- Statutory standard requires the head oval (crown of head to bottom of chin) to occupy 70% to 80% of the vertical height (31-36 mm on 45 mm photo).
+- Therefore, a head filling 70% to 80% of the frame is the EXACT OFFICIAL MANDATE, NOT oversized!
+- Persons with high foreheads, bald heads, or receding hairlines have natural skull contours where the top of the head sits close to the top boundary (~7-10% from top). As long as the head fits inside the canvas with white margin above the crown and is not cropped by the edge, it is 100% VALID and fully compliant.
+- Everyday civilian clothing of ANY pattern or color (including plaid shirts, casual wear) and transparent eyeglasses are 100% legal under Polish statutory law.
+
 CRITERIA TO EVALUATE:
 1. BACKGROUND:
    - Must be uniform solid white or light neutral without room/furniture/outdoor scenery.
-   - REJECT ONLY IF: The natural photo background was NOT removed (wall/room still visible) or there are severe distorted blotches. Clean AI cutout contours with natural hair edges are fully acceptable.
-2. BIOMETRIC FRAMING & FILLING (70% - 80% RULE):
-   - The head (from crown of hair to chin) should occupy approximately 70% to 80% of the vertical frame height (standard 31-36 mm on a 45 mm photo).
-   - Full oval of the face must be visible, centered, and not cropped off.
-   - REJECT ONLY IF: Head is far too small (less than 60% of height) OR head is cut off by the borders (crown or chin sliced off by canvas edge).
+   - REJECT ONLY IF: The natural photo background was NOT removed (wall/room still visible) or severe distorted blotches. Clean AI cutout contours with natural hair edges are fully acceptable.
+2. BIOMETRIC FRAMING & FILLING:
+   - Head must be centered with face visible.
+   - REJECT ONLY IF: Head is far too small (less than 55% of height) OR crown of head or chin is literally sliced off at the canvas border (cut in half by image border with 0px margin). DO NOT reject if top margin is present.
 3. SHARPNESS & QUALITY:
-   - The person's face must be in clear, sharp focus, with natural skin texture and clear facial features.
+   - Face must be in clear focus, with natural skin texture and clear features.
    - REJECT ONLY IF: Heavily blurry, out of focus, motion-blurred, or severely degraded by pixelation.
 4. FACIAL COMPLIANCE:
    - Frontal view (en-face), eyes open and looking into the camera, mouth closed, neutral expression.
@@ -434,8 +441,8 @@ If the photograph genuinely violates requirements (unremoved room background, bl
 {
   "valid": false,
   "high_quality": false,
-  "rejection_reason_pl": "Powód po polsku jeśli valid=false.",
-  "rejection_reason_ua": "Причина відхилення українською якщо valid=false."
+  "rejection_reason_pl": "Powod po polsku jesli valid=false.",
+  "rejection_reason_ua": "Prychyna ukrainskoju yakscho valid=false."
 }"""
     else:
         prompt = """You are an official biometrics compliance inspector for Polish Residence Card (Karta Pobytu) and official MOS digital photo system (35x45 mm).
