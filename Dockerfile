@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Устанавливаем системные утилиты: LibreOffice, OCR и системный конвертер HEIC (C++)
+# Установка системных зависимостей: LibreOffice и OCR (Tesseract)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     tesseract-ocr \
@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-rus \
     tesseract-ocr-pol \
     tesseract-ocr-eng \
-    libheif-examples \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
