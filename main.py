@@ -439,30 +439,28 @@ If the photograph genuinely violates requirements (unremoved room background, bl
 }"""
     else:
         prompt = """You are an official biometrics compliance inspector for Polish Residence Card (Karta Pobytu) and official MOS digital photo system (35x45 mm).
-Evaluate this portrait strictly according to official Polish statutory and EU ICAO biometric standards, with EXTRA EMPHASIS ON PHOTO QUALITY AND SHARPNESS:
+Evaluate this portrait strictly according to official Polish statutory and EU ICAO biometric standards:
 
 CRITICAL CHECKS:
-1. PHOTO QUALITY & RESOLUTION (VERY IMPORTANT):
-   - Face MUST be in sharp focus, with clearly visible fine facial details (eyes, lashes, lips, facial contours).
-   - REJECT IF: photo is blurry, out-of-focus, motion-blurred, noisy/grainy, pixelated, low-resolution, degraded by heavy compression, or smudged.
-2. LIGHTING & EXPOSURE:
-   - Lighting must be natural and balanced across the entire face.
-   - REJECT IF: severe shadows across face/eyes/cheeks, harsh glare, washed-out overexposure, or too dark underexposure.
+1. PHOTO QUALITY & RESOLUTION:
+   - Face MUST be in clear focus, with visible fine facial details.
+   - REJECT ONLY IF: photo is severely blurry, out-of-focus, motion-blurred, extreme pixelation, or face is unidentifiable.
+2. LIGHTING:
+   - REJECT ONLY IF: deep harsh pitch-black shadows across eyes/face or extreme blinding white flash blowout obscuring face features.
 3. EYES:
-   - Eyes MUST be fully open, clearly visible, looking directly at camera lens.
-   - REJECT IF: eyes closed, half-closed, squinting, pupils covered by hair/frames, sunglasses or tinted lenses, flash reflections obscuring eyes.
+   - Eyes must be open and looking into camera lens.
+   - REJECT ONLY IF: eyes firmly closed, sleeping, squinting shut, or dark opaque sunglasses concealing eyes. Standard transparent eyeglasses ARE FULLY PERMITTED.
 4. MOUTH & EXPRESSION:
-   - Mouth MUST be firmly closed. Expression MUST be strictly neutral.
-   - REJECT IF: mouth slightly open or parted, teeth showing, smiling, smirking, grinning, frowning, or non-neutral expression.
-5. HEAD POSE & FRAMING:
-   - Head MUST be strictly frontal (en face) and upright.
-   - REJECT IF: head turned away (profile, semi-profile, 3/4 view), tilted sideways, or tilted up/down.
-6. PERSON & VISIBILITY:
-   - EXACTLY ONE person in the photo. Full oval of face from chin to hairline visible.
-   - REJECT IF: no person/face, multiple persons/faces, face partially outside frame, hat/headwear (unless religious, but face oval fully visible).
-
-If the photo meets ALL official criteria including high visual quality and sharpness, set "valid": true and "high_quality": true.
-If the photo fails ANY criterion (especially if quality is poor, blurry, or low-res), set "valid": false and provide a polite, clear explanation in "rejection_reason_pl" and "rejection_reason_ua".
+   - Mouth closed, neutral expression.
+   - REJECT ONLY IF: wide open mouth, teeth showing, wide smiling/laughing, or exaggerated grimacing.
+5. HEAD POSE & POSITION:
+   - Frontal view (en-face).
+   - REJECT ONLY IF: profile, 3/4 turn, or head tilted far away.
+6. CLOTHING & ATTIRE RULES (IMPORTANT):
+   - Everyday civilian clothing of ANY pattern, color, or style (e.g. plaid shirts, checkered shirts, patterned shirts, polo, t-shirt, casual clothes) is 100% PERMITTED by Polish statutory law.
+   - DO NOT REJECT for clothing patterns, colors, or casual shirts.
+7. BACKGROUND (IMPORTANT):
+   - This is the initial photo before AI background removal. DO NOT REJECT for background color or room background.
 
 Respond ONLY with valid JSON:
 {
