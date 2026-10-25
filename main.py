@@ -408,24 +408,29 @@ async def verify_photo_endpoint(req: VerifyPhotoRequest):
         prompt = """You are an official compliance inspector for Polish Residence Cards (Karta Pobytu) and official MOS digital photo system (35x45 mm, 684x883 px).
 Evaluate this finished, processed biometric passport photograph strictly according to official Polish statutory and EU ICAO biometric criteria.
 
-IMPORTANT CONTEXT ON POLISH BIOMETRIC STANDARDS:
-- Statutory standard requires the head oval (crown of head to bottom of chin) to occupy 70% to 80% of the vertical height (31-36 mm on 45 mm photo).
-- Therefore, a head filling 70% to 80% of the frame is the EXACT OFFICIAL MANDATE, NOT oversized!
+IMPORTANT MANDATORY RULES:
+- EYEGLASSES STRICTLY FORBIDDEN: ABSOLUTELY NO GLASSES OF ANY KIND ARE ALLOWED (no optical glasses, no reading glasses, no sunglasses, no tinted glasses, no transparent rimless glasses). If the person is wearing ANY glasses, mark valid=false immediately!
+- PIERCINGS & JEWELRY: Facial piercings (nose studs/rings, septum, lip piercings, eyebrow piercings, earrings, ear studs) ARE FULLY PERMITTED AND ACCEPTABLE! REJECT ONLY IF piercing/jewelry literally covers half the face obscuring primary facial biometric features.
+- Statutory standard requires the head oval (crown of head to bottom of chin) to occupy 70% to 80% of the vertical height (31-36 mm on 45 mm photo). Therefore, a head filling 70% to 80% of the frame is the EXACT OFFICIAL MANDATE, NOT oversized!
 - Persons with high foreheads, bald heads, or receding hairlines have natural skull contours where the top of the head sits close to the top boundary (~7-10% from top). As long as the head fits inside the canvas with white margin above the crown and is not cropped by the edge, it is 100% VALID and fully compliant.
-- Everyday civilian clothing of ANY pattern or color (including plaid shirts, casual wear) and transparent eyeglasses are 100% legal under Polish statutory law.
+- Everyday civilian clothing of ANY pattern or color (including plaid shirts, casual wear) is 100% legal.
 
 CRITERIA TO EVALUATE:
-1. BACKGROUND:
+1. EYEGLASSES:
+   - REJECT IF: The person is wearing ANY glasses.
+   - Reason PL: "Obecność okularów na zdjęciu. Zgodnie z wymogami urzędowymi dozwolone są wyłącznie zdjęcia bez żadnych okularów (w tym korekcyjnych i przeciwsłonecznych). Prosimy zdjąć okulary i zrobić zdjęcie ponownie."
+   - Reason UA: "Наявність окулярів на фото. Згідно з вимогами, дозволені виключно фото без будь-яких окулярів (зокрема оптичних, для зору та сонцезахисних). Будь ласка, зніміть окуляри та сфотографуйтеся знову."
+2. BACKGROUND:
    - Must be uniform solid white or light neutral without room/furniture/outdoor scenery.
    - REJECT ONLY IF: The natural photo background was NOT removed (wall/room still visible) or severe distorted blotches. Clean AI cutout contours with natural hair edges are fully acceptable.
-2. BIOMETRIC FRAMING & FILLING:
+3. BIOMETRIC FRAMING & FILLING:
    - Head must be centered with face visible.
    - REJECT ONLY IF: Head is far too small (less than 55% of height) OR crown of head or chin is literally sliced off at the canvas border (cut in half by image border with 0px margin). DO NOT reject if top margin is present.
-3. SHARPNESS & QUALITY:
+4. SHARPNESS & QUALITY:
    - Face must be in clear focus, with natural skin texture and clear features.
    - REJECT ONLY IF: Heavily blurry, out of focus, motion-blurred, or severely degraded by pixelation.
-4. FACIAL COMPLIANCE:
-   - Frontal view (en-face), eyes open and looking into the camera, mouth closed, neutral expression.
+5. FACIAL COMPLIANCE:
+   - Frontal view (en-face), eyes open and looking into the camera, mouth closed, neutral expression, and NO glasses.
 
 If the photograph meets the official biometric requirements for Karta Pobytu / MOS, output:
 {
@@ -435,7 +440,7 @@ If the photograph meets the official biometric requirements for Karta Pobytu / M
   "rejection_reason_ua": ""
 }
 
-If the photograph genuinely violates requirements (unremoved room background, blurry face, closed eyes, or head cropped by borders), output:
+If the photograph genuinely violates requirements (wearing glasses, unremoved room background, blurry face, closed eyes, or head cropped by borders), output:
 {
   "valid": false,
   "high_quality": false,
@@ -447,24 +452,40 @@ If the photograph genuinely violates requirements (unremoved room background, bl
 Evaluate this portrait strictly according to official Polish statutory and EU ICAO biometric standards:
 
 CRITICAL CHECKS:
-1. PHOTO QUALITY & RESOLUTION:
+1. EYEGLASSES RULE (STRICT NO GLASSES OF ANY KIND):
+   - ABSOLUTELY NO GLASSES PERMITTED: The person MUST NOT be wearing ANY eyeglasses (optical glasses for vision, prescription spectacles, reading glasses, sunglasses, tinted glasses, transparent glasses, rimless glasses, or fashion frames).
+   - REJECT IMMEDIATELY (valid=false) if ANY glasses or spectacles are detected on the face!
+   - Reason in PL if glasses detected: "Obecność okularów na zdjęciu. Zgodnie z wymogami urzędowymi dozwolone są wyłącznie zdjęcia bez żadnych okularów (w tym korekcyjnych i przeciwsłonecznych). Prosimy zdjąć okulary i zrobić zdjęcie ponownie."
+   - Reason in UA if glasses detected: "Наявність окулярів на фото. Згідно з вимогами, дозволені виключно фото без будь-яких окулярів (зокрема оптичних, для зору та сонцезахисних). Будь ласка, зніміть окуляри та сфотографуйтеся знову."
+
+2. PIERCINGS & JEWELRY RULE:
+   - PIERCINGS ARE FULLY ALLOWED: Facial piercings (nose studs/rings, nostril piercing, septum, lip piercing, labret, eyebrow piercing/ring, ear piercings, earrings, ear studs, ear tunnels, chin piercing) ARE 100% PERMITTED and MUST NOT BE REJECTED!
+   - REJECT FOR PIERCING ONLY IF: The jewelry/piercing literally covers half the face or conceals primary facial biometrics (eyes or mouth like a large face mask). Normal, discrete, or standard piercings of any type are fully acceptable!
+
+3. PHOTO QUALITY & RESOLUTION:
    - Face MUST be in clear focus, with visible fine facial details.
    - REJECT ONLY IF: photo is severely blurry, out-of-focus, motion-blurred, extreme pixelation, or face is unidentifiable.
-2. LIGHTING:
+
+4. LIGHTING:
    - REJECT ONLY IF: deep harsh pitch-black shadows across eyes/face or extreme blinding white flash blowout obscuring face features.
-3. EYES:
+
+5. EYES:
    - Eyes must be open and looking into camera lens.
-   - REJECT ONLY IF: eyes firmly closed, sleeping, squinting shut, or dark opaque sunglasses concealing eyes. Standard transparent eyeglasses ARE FULLY PERMITTED.
-4. MOUTH & EXPRESSION:
+   - REJECT IF: eyes firmly closed, sleeping, squinting shut.
+
+6. MOUTH & EXPRESSION:
    - Mouth closed, neutral expression.
    - REJECT ONLY IF: wide open mouth, teeth showing, wide smiling/laughing, or exaggerated grimacing.
-5. HEAD POSE & POSITION:
+
+7. HEAD POSE & POSITION:
    - Frontal view (en-face).
    - REJECT ONLY IF: profile, 3/4 turn, or head tilted far away.
-6. CLOTHING & ATTIRE RULES (IMPORTANT):
+
+8. CLOTHING & ATTIRE RULES:
    - Everyday civilian clothing of ANY pattern, color, or style (e.g. plaid shirts, checkered shirts, patterned shirts, polo, t-shirt, casual clothes) is 100% PERMITTED by Polish statutory law.
    - DO NOT REJECT for clothing patterns, colors, or casual shirts.
-7. BACKGROUND (IMPORTANT):
+
+9. BACKGROUND (IMPORTANT):
    - This is the initial photo before AI background removal. DO NOT REJECT for background color or room background.
 
 Respond ONLY with valid JSON:
