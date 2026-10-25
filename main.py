@@ -353,8 +353,10 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
 
 # --- 7. ПРОВЕРКА ФОТО НА БИОМЕТРИЮ ЧЕРЕЗ GEMINI AI (БЕЗОПАСНЫЙ СЕРВЕРНЫЙ ПРОКСИ) ---
 GEMINI_MODELS = [
-    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
     "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 class VerifyPhotoRequest(BaseModel):
@@ -531,43 +533,59 @@ Respond ONLY with valid JSON:
         }],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.1
+            "temperature": 0.0
         }
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    last_error_code = 0
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for model in GEMINI_MODELS:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-            try:
-                res = await client.post(
-                    url,
-                    json=gemini_payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Referer": "https://plikowo.com.pl/",
-                        "x-goog-api-key": gemini_key
-                    }
-                )
-                if res.status_code == 404:
-                    continue
-                if not res.is_success:
-                    print(f"[WARN] Gemini model {model} status {res.status_code}: {res.text[:200]}")
-                    continue
-                data = res.json()
-                raw_text = ""
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    for p in parts:
-                        if "text" in p:
-                            raw_text += p["text"]
-                if raw_text:
-                    parsed = _extract_json_from_gemini(raw_text)
-                    if isinstance(parsed, dict) and "valid" in parsed:
-                        return parsed
-            except Exception as e:
-                print(f"[WARN] Gemini model {model} attempt failed: {e}")
-                continue
+            for retry in range(2):
+                try:
+                    res = await client.post(
+                        url,
+                        json=gemini_payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "Referer": "https://plikowo.com.pl/",
+                            "x-goog-api-key": gemini_key
+                        }
+                    )
+                    last_error_code = res.status_code
+                    if res.status_code == 404:
+                        break  # model not found, try next model
+                    if res.status_code in (503, 429):
+                        print(f"[WARN] Gemini model {model} temporary load status {res.status_code}, retry {retry+1}...")
+                        await asyncio.sleep(0.8)
+                        continue
+                    if not res.is_success:
+                        print(f"[WARN] Gemini model {model} status {res.status_code}: {res.text[:200]}")
+                        break
+                    data = res.json()
+                    raw_text = ""
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        for p in parts:
+                            if "text" in p:
+                                raw_text += p["text"]
+                    if raw_text:
+                        parsed = _extract_json_from_gemini(raw_text)
+                        if isinstance(parsed, dict) and "valid" in parsed:
+                            return parsed
+                except Exception as e:
+                    print(f"[WARN] Gemini model {model} retry {retry+1} attempt failed: {e}")
+                    if retry == 0:
+                        await asyncio.sleep(0.5)
+                        continue
+
+    if last_error_code in (401, 403):
+        err_pl = "Błąd autoryzacji Gemini API (Klucz API jest nieprawidłowy lub zablokowany)."
+        err_ua = "Помилка авторизації Gemini API (Ключ API недійсний або заблокований)."
+    else:
+        err_pl = "Serwery Google Gemini są chwilowo przeciążone (błąd 503 / timeout). Prosimy spróbować ponownie za chwilę."
+        err_ua = "Сервери Google Gemini тимчасово перевантажені (помилка 503 / таймаут). Будь ласка, спробуйте ще раз за мить."
 
     return {
         "valid": False,
@@ -577,6 +595,6 @@ Respond ONLY with valid JSON:
         "mouth_closed": False,
         "facing_camera": False,
         "neutral_expression": False,
-        "rejection_reason_pl": "Nie udało się zweryfikować zdjęcia przez Gemini (sprawdź klucz API lub połączenie).",
-        "rejection_reason_ua": "Не вдалося перевірити фото через Gemini (перевірте ключ API або з'єднання)."
+        "rejection_reason_pl": err_pl,
+        "rejection_reason_ua": err_ua
     }
