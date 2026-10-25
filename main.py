@@ -353,9 +353,8 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
 
 # --- 7. ПРОВЕРКА ФОТО НА БИОМЕТРИЮ ЧЕРЕЗ GEMINI AI (БЕЗОПАСНЫЙ СЕРВЕРНЫЙ ПРОКСИ) ---
 GEMINI_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
 ]
 
 class VerifyPhotoRequest(BaseModel):
@@ -382,17 +381,28 @@ async def verify_photo_endpoint(req: VerifyPhotoRequest):
     """
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not gemini_key:
-        print("[ERROR] GEMINI_API_KEY is not set in Render Environment Variables!")
+        desktop_env = r"C:\Users\Oleksandr\Desktop\IPkey паспорт.env"
+        if os.path.exists(desktop_env):
+            try:
+                with open(desktop_env, "r", encoding="utf-8", errors="ignore") as f_key:
+                    val = f_key.read().strip()
+                    if val and not val.startswith("#"):
+                        gemini_key = val
+            except Exception:
+                pass
+
+    if not gemini_key:
+        print("[ERROR] GEMINI_API_KEY is not set!")
         return {
-            "valid": True,
-            "high_quality": True,
-            "sharp_and_clear": True,
-            "eyes_open": True,
-            "mouth_closed": True,
-            "facing_camera": True,
-            "neutral_expression": True,
-            "rejection_reason_pl": "",
-            "rejection_reason_ua": ""
+            "valid": False,
+            "high_quality": False,
+            "sharp_and_clear": False,
+            "eyes_open": False,
+            "mouth_closed": False,
+            "facing_camera": False,
+            "neutral_expression": False,
+            "rejection_reason_pl": "Błąd serwera: brak klucza Gemini API (GEMINI_API_KEY).",
+            "rejection_reason_ua": "Помилка сервера: відсутній ключ Gemini API (GEMINI_API_KEY)."
         }
 
     raw_b64 = req.image
@@ -406,6 +416,7 @@ async def verify_photo_endpoint(req: VerifyPhotoRequest):
     elif "," in raw_b64:
         raw_b64 = raw_b64.split(",", 1)[1]
 
+
     if req.stage == "final":
         prompt = """You are an official compliance inspector for Polish Residence Cards (Karta Pobytu) and official MOS digital photo system (35x45 mm, 684x883 px).
 Evaluate this finished, processed biometric passport photograph strictly according to official Polish statutory and EU ICAO biometric criteria.
@@ -418,21 +429,26 @@ IMPORTANT MANDATORY RULES:
 - Everyday civilian clothing of ANY pattern or color (including plaid shirts, casual wear) is 100% legal.
 
 CRITERIA TO EVALUATE:
-1. EYEGLASSES:
-   - REJECT IF: The person is wearing ANY glasses.
+1. HAIR, EYES & BROWS (CRITICAL BIOMETRIC MANDATE):
+   - Eyes and the entire eyebrow arch MUST be 100% uncovered, unobstructed, and fully visible.
+   - REJECT IF: Any hair, fringe, bangs, or strands cover, touch, or obscure the eyes, pupils, eyebrows, or outer eye corners!
+   - Reason PL: "Włosy zasłaniają lub nachodzą na oczy / linię brwi. Zgodnie z oficjalnymi wymogami biometrycznymi do Karty Pobytu i paszportu oczy oraz cała linia brwi muszą być w 100% odsłonięte (włosy należy odgarnąć za uszy lub związać)."
+   - Reason UA: "Волосся закриває або спадає на очі чи лінію брів. Згідно з офіційними біометричними вимогами до Карти побиту та паспорта очі та вся лінія брів мають бути на 100% відкритими (волосся необхідно прибрати за вуха або назад)."
+2. EYEGLASSES:
+   - REJECT IF: The person is wearing ANY glasses (including optical, reading, sunglasses, or rimless).
    - Reason PL: "Obecność okularów na zdjęciu. Zgodnie z wymogami urzędowymi dozwolone są wyłącznie zdjęcia bez żadnych okularów (w tym korekcyjnych i przeciwsłonecznych). Prosimy zdjąć okulary i zrobić zdjęcie ponownie."
    - Reason UA: "Наявність окулярів на фото. Згідно з вимогами, дозволені виключно фото без будь-яких окулярів (зокрема оптичних, для зору та сонцезахисних). Будь ласка, зніміть окуляри та сфотографуйтеся знову."
-2. BACKGROUND:
+3. BACKGROUND:
    - Must be uniform solid white or light neutral without room/furniture/outdoor scenery.
    - REJECT ONLY IF: The natural photo background was NOT removed (wall/room still visible) or severe distorted blotches. Clean AI cutout contours with natural hair edges are fully acceptable.
-3. BIOMETRIC FRAMING & FILLING:
+4. BIOMETRIC FRAMING & FILLING:
    - Head must be centered with face visible.
    - REJECT ONLY IF: Head is far too small (less than 55% of height) OR crown of head or chin is literally sliced off at the canvas border (cut in half by image border with 0px margin). DO NOT reject if top margin is present.
-4. SHARPNESS & QUALITY:
+5. SHARPNESS & QUALITY:
    - Face must be in clear focus, with natural skin texture and clear features.
    - REJECT ONLY IF: Heavily blurry, out of focus, motion-blurred, or severely degraded by pixelation.
-5. FACIAL COMPLIANCE:
-   - Frontal view (en-face), eyes open and looking into the camera, mouth closed, neutral expression, and NO glasses.
+6. FACIAL COMPLIANCE:
+   - Frontal view (en-face), eyes wide open and looking into the camera, mouth closed, neutral expression, and NO glasses.
 
 If the photograph meets the official biometric requirements for Karta Pobytu / MOS, output:
 {
@@ -454,30 +470,33 @@ If the photograph genuinely violates requirements (wearing glasses, unremoved ro
 Evaluate this portrait strictly according to official Polish statutory and EU ICAO biometric standards:
 
 CRITICAL CHECKS:
-1. EYEGLASSES RULE (STRICT NO GLASSES OF ANY KIND):
+1. HAIR, EYES & BROWS RULE (CRITICAL BIOMETRIC MANDATE):
+   - Eyes, pupils, and the entire eyebrow arch MUST be 100% uncovered, unobstructed, and clearly visible.
+   - REJECT IMMEDIATELY (valid=false) IF: Any strands of hair, fringe, bangs, locks, or stray hair fall across, touch, overlap, or obscure the eyes, eyebrows, or temple/outer eye corners! Hair must be cleanly pulled back or tucked behind ears so the full eye region and brows are completely bare.
+   - Reason in PL: "Włosy zasłaniają lub nachodzą na oczy / linię brwi. Zgodnie z oficjalnymi wymogami biometrycznymi do Karty Pobytu i paszportu oczy oraz cała linia brwi muszą być w 100% odsłonięte (włosy należy odgarnąć za uszy lub związać)."
+   - Reason in UA: "Волосся закриває або спадає на очі чи лінію брів. Згідно з офіційними біометричними вимогами до Карти побиту та паспорта очі та вся лінія брів мають бути на 100% відкритими (волосся необхідно прибрати за вуха або назад)."
+
+2. EYEGLASSES RULE (STRICT NO GLASSES OF ANY KIND):
    - ABSOLUTELY NO GLASSES PERMITTED: The person MUST NOT be wearing ANY eyeglasses (optical glasses for vision, prescription spectacles, reading glasses, sunglasses, tinted glasses, transparent glasses, rimless glasses, or fashion frames).
    - REJECT IMMEDIATELY (valid=false) if ANY glasses or spectacles are detected on the face!
    - Reason in PL if glasses detected: "Obecność okularów na zdjęciu. Zgodnie z wymogami urzędowymi dozwolone są wyłącznie zdjęcia bez żadnych okularów (w tym korekcyjnych i przeciwsłonecznych). Prosimy zdjąć okulary i zrobić zdjęcie ponownie."
-   - Reason in UA if glasses detected: "Наявність окулярів на фото. Згідно з вимогами, дозволені виключно фото без будь-яких окулярів (зокрема оптичних, для зору та сонцезахисних). Будь ласка, зніміть окуляри та сфотографуйтеся знову."
+   - Reason in UA if glasses detected: "Наявність окулярів на фото. Згідно з вимогами, дозволені виключно фото без будь-яких окулярów (зокрема оптичних, для зору та сонцезахисних). Будь ласка, зніміть окуляри та сфотографуйтеся знову."
 
-2. PIERCINGS & JEWELRY RULE:
+3. PIERCINGS & JEWELRY RULE:
    - PIERCINGS ARE FULLY ALLOWED: Facial piercings (nose studs/rings, nostril piercing, septum, lip piercing, labret, eyebrow piercing/ring, ear piercings, earrings, ear studs, ear tunnels, chin piercing) ARE 100% PERMITTED and MUST NOT BE REJECTED!
    - REJECT FOR PIERCING ONLY IF: The jewelry/piercing literally covers half the face or conceals primary facial biometrics (eyes or mouth like a large face mask). Normal, discrete, or standard piercings of any type are fully acceptable!
 
-3. PHOTO QUALITY & RESOLUTION:
+4. PHOTO QUALITY & RESOLUTION:
    - Face MUST be in clear focus, with visible fine facial details.
    - REJECT ONLY IF: photo is severely blurry, out-of-focus, motion-blurred, extreme pixelation, or face is unidentifiable.
 
-4. LIGHTING:
+5. LIGHTING:
    - REJECT ONLY IF: deep harsh pitch-black shadows across eyes/face or extreme blinding white flash blowout obscuring face features.
 
-5. EYES:
-   - Eyes must be open and looking into camera lens.
-   - REJECT IF: eyes firmly closed, sleeping, squinting shut.
-
-6. MOUTH & EXPRESSION:
-   - Mouth closed, neutral expression.
-   - REJECT ONLY IF: wide open mouth, teeth showing, wide smiling/laughing, or exaggerated grimacing.
+6. EYES & EXPRESSION:
+   - Eyes wide open looking directly into camera lens.
+   - Mouth firmly closed, neutral expression.
+   - REJECT IF: eyes closed, half-closed, squinting, or wide open mouth, smiling, grinning.
 
 7. HEAD POSE & POSITION:
    - Frontal view (en-face).
@@ -525,6 +544,7 @@ Respond ONLY with valid JSON:
                     json=gemini_payload,
                     headers={
                         "Content-Type": "application/json",
+                        "Referer": "https://plikowo.com.pl/",
                         "x-goog-api-key": gemini_key
                     }
                 )
@@ -550,13 +570,13 @@ Respond ONLY with valid JSON:
                 continue
 
     return {
-        "valid": True,
-        "high_quality": True,
-        "sharp_and_clear": True,
-        "eyes_open": True,
-        "mouth_closed": True,
-        "facing_camera": True,
-        "neutral_expression": True,
-        "rejection_reason_pl": "",
-        "rejection_reason_ua": ""
+        "valid": False,
+        "high_quality": False,
+        "sharp_and_clear": False,
+        "eyes_open": False,
+        "mouth_closed": False,
+        "facing_camera": False,
+        "neutral_expression": False,
+        "rejection_reason_pl": "Nie udało się zweryfikować zdjęcia przez Gemini (sprawdź klucz API lub połączenie).",
+        "rejection_reason_ua": "Не вдалося перевірити фото через Gemini (перевірте ключ API або з'єднання)."
     }
