@@ -46,6 +46,7 @@ except Exception as e:
         pass
 
 # Загрузка переменных окружения из .env
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv()
 
 # Поддержка форматов HEIC и AVIF
@@ -352,8 +353,9 @@ async def extract_text(file: UploadFile = File(...), lang: str = "ukr+rus+pol+en
 
 # --- 7. ПРОВЕРКА ФОТО НА БИОМЕТРИЮ ЧЕРЕЗ GEMINI AI (БЕЗОПАСНЫЙ СЕРВЕРНЫЙ ПРОКСИ) ---
 GEMINI_MODELS = [
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
 ]
 
 class VerifyPhotoRequest(BaseModel):
@@ -523,7 +525,7 @@ Respond ONLY with valid JSON:
                     json=gemini_payload,
                     headers={
                         "Content-Type": "application/json",
-                        "Referer": "https://plikowo.com.pl/"
+                        "x-goog-api-key": gemini_key
                     }
                 )
                 if res.status_code == 404:
