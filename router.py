@@ -126,7 +126,7 @@ class PhotoProcessingRouter:
         # 5. Якщо потрібен кінцевий біометричний JPEG MOS (35х45 мм)
         if output_biometric_jpeg:
             # Отримуємо координати обличчя
-            analysis = self.analyzer.analyze_cv2(cv_raw)
+            analysis = self.analyzer.analyze_pil(pil_raw)
             face_box = None
             if analysis.get("face_detected") and analysis.get("face_box"):
                 face_box = analysis["face_box"]
