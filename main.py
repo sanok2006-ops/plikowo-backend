@@ -19,6 +19,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image, ImageOps
+import cv2
+import numpy as np
 
 # Гарантируем, что текущая папка всегда в sys.path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,8 +55,10 @@ load_dotenv()
 try:
     import pillow_heif
     pillow_heif.register_heif_opener()
-    pillow_heif.register_avif_opener()
-except ImportError:
+    if hasattr(pillow_heif, "register_avif_opener"):
+        pillow_heif.register_avif_opener()
+except Exception as e:
+    print(f"[WARN] pillow_heif init: {e}")
     pillow_heif = None
 
 try:
@@ -166,22 +170,109 @@ def remove_bg_huggingface(content: bytes) -> Tuple[bytes, str]:
         return img_bytes, content_type
 
 
+def apply_studio_lighting_pil(pil_img: Image.Image) -> Image.Image:
+    """
+    Интеллектуальное студийное освещение и выравнивание теней (Вариант 1):
+    1. Работает строго в цветовом пространстве LAB по каналу яркости L.
+       100% сохранение исходного тона кожи, цвета глаз, губ и волос.
+    2. Локально вытягивает ТОЛЬКО темные тени (под подбородком, на шее, в глазницах,
+       затененная сторона лица при боковом свете).
+    3. Зоны нормальной экспозиции, средние тона и светлые участки лица остаются 
+       100% нетронутыми без какого-либо общего осветления ("без засветления").
+    4. Если на фото нет глубоких теней — фото остается в оригинальной контрастности.
+    """
+    try:
+        if pil_img.mode != "RGBA":
+            pil_img = pil_img.convert("RGBA")
+        np_img = np.array(pil_img)
+        if np_img.ndim != 3 or np_img.shape[2] != 4:
+            return pil_img
+
+        bgr = cv2.cvtColor(np_img, cv2.COLOR_RGBA2BGR)
+        alpha = np_img[:, :, 3]
+
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l_float = l.astype(np.float32)
+
+        # Анализируем силуэт человека (внутри альфа-маски)
+        mask = (alpha > 20).astype(np.uint8)
+        if np.sum(mask) == 0:
+            return pil_img
+
+        subject_l = l[mask > 0]
+        # Проверяем, есть ли на лице реальные темные тени (10-й перцентиль < 110)
+        p10 = float(np.percentile(subject_l, 10))
+        if p10 >= 115.0:
+            # На фото уже ровный студийный свет, тени отсутствуют — ничего не осветляем!
+            return pil_img
+
+        # Оцениваем карту освещенности через билатеральный фильтр (сохраняет текстуру кожи)
+        illumination = cv2.bilateralFilter(l, d=9, sigmaColor=75, sigmaSpace=75).astype(np.float32)
+
+        # Выборочный подъем ТОЛЬКО диапазона теней (L < 115):
+        # Пиксели с нормальной яркостью (L >= 115) получают gain = 1.0 (ноль изменений)
+        shadow_cutoff = 115.0
+        shadow_depth = np.clip((shadow_cutoff - illumination) / shadow_cutoff, 0.0, 1.0)
+        gain = 1.0 + 0.45 * np.power(shadow_depth, 1.5)
+        l_lifted = np.clip(l_float * gain, 0, 255).astype(np.uint8)
+
+        # Деликатный CLAHE с малым clipLimit исключительно для четкости черт в тенях
+        clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8, 8))
+        l_clahe = clahe.apply(l_lifted)
+        l_enhanced = cv2.addWeighted(l_lifted, 0.85, l_clahe, 0.15, 0)
+
+        # Применяем подъем теней строго к пикселям человека
+        l_result = l.copy()
+        l_result[mask > 0] = l_enhanced[mask > 0]
+
+        # Собираем обратно с нетронутыми цветными каналами A и B
+        enhanced_lab = cv2.merge([l_result, a, b])
+        enhanced_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        enhanced_rgb = cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB)
+
+        result_np = np.dstack([enhanced_rgb, alpha])
+        return Image.fromarray(result_np, mode="RGBA")
+    except Exception as e:
+        print(f"[WARN] apply_studio_lighting_pil fallback: {e}")
+        return pil_img
+
+
 @app.post("/remove-bg")
 async def process_photo_remove_bg(
     file: UploadFile = File(...),
-    enhance: bool = False
+    enhance: bool = False,
+    studio_light: bool = True
 ):
     try:
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
-        # Виключно HuggingFace Space (BiRefNet)
-        result_bytes, media_type = await asyncio.to_thread(remove_bg_huggingface, content)
+        # 1. HuggingFace Space (BiRefNet)
+        raw_cutout_bytes, orig_media_type = await asyncio.to_thread(remove_bg_huggingface, content)
+
+        # 2. Выравнивание теней и студийный свет (Вариант 1)
+        if studio_light:
+            try:
+                cutout_img = Image.open(io.BytesIO(raw_cutout_bytes))
+                studio_img = apply_studio_lighting_pil(cutout_img)
+                out_buf = io.BytesIO()
+                studio_img.save(out_buf, format="PNG")
+                result_bytes = out_buf.getvalue()
+                media_type = "image/png"
+            except Exception as e:
+                print(f"[WARN] Studio lighting postprocess error: {e}")
+                result_bytes = raw_cutout_bytes
+                media_type = orig_media_type
+        else:
+            result_bytes = raw_cutout_bytes
+            media_type = orig_media_type
+
         headers = {
             "X-Plikowo-Engine": "HuggingFace-BiRefNet",
             "X-Plikowo-Scenario": "A_HIGH_QUALITY",
-            "X-Plikowo-Corrections": "hf_birefnet_alpha"
+            "X-Plikowo-Corrections": "hf_birefnet_alpha,studio_light_v1"
         }
         return Response(content=result_bytes, media_type=media_type, headers=headers)
 
@@ -420,108 +511,81 @@ async def verify_photo_endpoint(req: VerifyPhotoRequest):
 
 
     if req.stage == "final":
-        prompt = """You are an official compliance inspector for Polish Residence Cards (Karta Pobytu) and official MOS digital photo system (35x45 mm, 684x883 px).
-Evaluate this finished, processed biometric passport photograph strictly according to official Polish statutory and EU ICAO biometric criteria.
+        prompt = """Ты — контролер качества готовых биометрических фотографий для польских документов (Karta Pobytu, Dowód Osobisty, Paszport) по стандартам MOS / 35x45 мм.
+Перед тобой ГОТОВЫЙ результат автоматической обработки.
 
-IMPORTANT MANDATORY RULES:
-- EYEGLASSES STRICTLY FORBIDDEN: ABSOLUTELY NO GLASSES OF ANY KIND ARE ALLOWED (no optical glasses, no reading glasses, no sunglasses, no tinted glasses, no transparent rimless glasses). If the person is wearing ANY glasses, mark valid=false immediately!
-- PIERCINGS & JEWELRY: Facial piercings (nose studs/rings, septum, lip piercings, eyebrow piercings, earrings, ear studs) ARE FULLY PERMITTED AND ACCEPTABLE! REJECT ONLY IF piercing/jewelry literally covers half the face obscuring primary facial biometric features.
-- Statutory standard requires the head oval (crown of head to bottom of chin) to occupy 70% to 80% of the vertical height (31-36 mm on 45 mm photo). Therefore, a head filling 70% to 80% of the frame is the EXACT OFFICIAL MANDATE, NOT oversized!
-- Persons with high foreheads, bald heads, or receding hairlines have natural skull contours where the top of the head sits close to the top boundary (~7-10% from top). As long as the head fits inside the canvas with white margin above the crown and is not cropped by the edge, it is 100% VALID and fully compliant.
-- Everyday civilian clothing of ANY pattern or color (including plaid shirts, casual wear) is 100% legal.
+Оцени техническое качество кадра по следующим ключевым критериям:
 
-CRITERIA TO EVALUATE:
-1. HAIR, EYES & BROWS (CRITICAL BIOMETRIC MANDATE):
-   - Eyes and the entire eyebrow arch MUST be 100% uncovered, unobstructed, and fully visible.
-   - REJECT IF: Any hair, fringe, bangs, or strands cover, touch, or obscure the eyes, pupils, eyebrows, or outer eye corners!
-   - Reason PL: "Włosy zasłaniają lub nachodzą na oczy / linię brwi. Zgodnie z oficjalnymi wymogami biometrycznymi do Karty Pobytu i paszportu oczy oraz cała linia brwi muszą być w 100% odsłonięte (włosy należy odgarnąć za uszy lub związać)."
-   - Reason UA: "Волосся закриває або спадає на очі чи лінію брів. Згідно з офіційними біометричними вимогами до Карти побиту та паспорта очі та вся лінія брів мають бути на 100% відкритими (волосся необхідно прибрати за вуха або назад)."
-2. EYEGLASSES:
-   - REJECT IF: The person is wearing ANY glasses (including optical, reading, sunglasses, or rimless).
-   - Reason PL: "Obecność okularów na zdjęciu. Zgodnie z wymogami urzędowymi dozwolone są wyłącznie zdjęcia bez żadnych okularów (w tym korekcyjnych i przeciwsłonecznych). Prosimy zdjąć okulary i zrobić zdjęcie ponownie."
-   - Reason UA: "Наявність окулярів на фото. Згідно з вимогами, дозволені виключно фото без будь-яких окулярів (зокрема оптичних, для зору та сонцезахисних). Будь ласка, зніміть окуляри та сфотографуйтеся знову."
-3. BACKGROUND:
-   - Must be uniform solid white or light neutral without room/furniture/outdoor scenery.
-   - REJECT ONLY IF: The natural photo background was NOT removed (wall/room still visible) or severe distorted blotches. Clean AI cutout contours with natural hair edges are fully acceptable.
-4. BIOMETRIC FRAMING & FILLING:
-   - Head must be centered with face visible.
-   - REJECT ONLY IF: Head is far too small (less than 55% of height) OR crown of head or chin is literally sliced off at the canvas border (cut in half by image border with 0px margin). DO NOT reject if top margin is present.
-5. SHARPNESS & QUALITY:
-   - Face must be in clear focus, with natural skin texture and clear features.
-   - REJECT ONLY IF: Heavily blurry, out of focus, motion-blurred, or severely degraded by pixelation.
-6. FACIAL COMPLIANCE:
-   - Frontal view (en-face), eyes wide open and looking into the camera, mouth closed, neutral expression, and NO glasses.
+1. ОСВЕЩЕНИЕ И ТОН (светлое нормальное фото):
+   - Лицо светлое, чистое, хорошо и равномерно освещенное.
+   - Нет глубоких проваленных черных теней на лице.
+   - Нет выбитых белых пересветов.
 
-If the photograph meets the official biometric requirements for Karta Pobytu / MOS, output:
+2. КАЧЕСТВО ИЗОБРАЖЕНИЯ (не пиксельное):
+   - Изображение четкое, резкое, черты лица (глаза, губы, нос) хорошо различимы.
+   - СТРОГО БРАКОВАТЬ (is_valid = false), если фото пиксельное, с лесенками, пережатое, размытое или в низком разрешении.
+
+3. РАЗМЕР И ФОН (в размере с белым фоном):
+   - Фон: однородный чистый белый (RGB 255, 255, 255) вокруг силуэта, без посторонних предметов.
+   - Масштаб: лицо крупным планом занимает примерно 70–80% высоты кадра (стандарт MOS 35x45 мм).
+   - Отступ сверху: над прической есть свободное белое пространство (макушка не срезана в 0 px).
+   - ВНИМАНИЕ ПО ПЛЕЧАМ: В стандарте 35x45 мм лицо занимает почти весь кадр, поэтому внизу видна только верхняя линия одежды/шея. Это АБСОЛЮТНО НОРМАЛЬНО. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО отклонять фото по плечам!
+
+4. БИОМЕТРИЯ И АКСЕССУАРЫ:
+   - Лицо анфас, глаза открыты и смотрят прямо, рот закрыт.
+   - ОЧКИ СТРОГО ЗАПРЕЩЕНЫ. Если на готовом фото видны любые очки — отклонять!
+   - Пирсинг и родинки ПОЛНОСТЬЮ РАЗРЕШЕНЫ.
+
+Верни ответ СТРОГО в формате JSON без markdown-оберток (без ```json):
 {
-  "valid": true,
-  "high_quality": true,
-  "rejection_reason_pl": "",
-  "rejection_reason_ua": ""
-}
-
-If the photograph genuinely violates requirements (wearing glasses, unremoved room background, blurry face, closed eyes, or head cropped by borders), output:
-{
-  "valid": false,
-  "high_quality": false,
-  "rejection_reason_pl": "Powod po polsku jesli valid=false.",
-  "rejection_reason_ua": "Prychyna ukrainskoju yakscho valid=false."
+  "is_valid": true,
+  "confidence_score": 0.95,
+  "reasons_for_rejection": [],
+  "metrics": {
+    "lighting_bright_and_even": true,
+    "sharp_and_not_pixelated": true,
+    "size_and_white_background_ok": true,
+    "no_glasses": true,
+    "face_biometrics_ok": true
+  },
+  "recommendations_for_user_ru": "Все параметры соответствуют стандарту.",
+  "recommendations_for_user_ua": "Усі параметри відповідають стандарту.",
+  "recommendations_for_user_pl": "Wszystkie parametry są zgodne ze standardem."
 }"""
     else:
-        prompt = """You are an official biometrics compliance inspector for Polish Residence Card (Karta Pobytu) and official MOS digital photo system (35x45 mm).
-Evaluate this portrait strictly according to official Polish statutory and EU ICAO biometric standards:
+        prompt = """Ты — строгий контролер первичных селфи для биометрических документов (Karta Pobytu, Dowód Osobisty, Paszport).
+Твоя задача — проверить исходный снимок пользователя ДО обработки и БРАКОВАТЬ фото при наличии любых нарушений биометрии.
 
-CRITICAL CHECKS:
-1. HAIR, EYES & BROWS RULE (CRITICAL BIOMETRIC MANDATE):
-   - Eyes, pupils, and the entire eyebrow arch MUST be 100% uncovered, unobstructed, and clearly visible.
-   - REJECT IMMEDIATELY (valid=false) IF: Any strands of hair, fringe, bangs, locks, or stray hair fall across, touch, overlap, or obscure the eyes, eyebrows, or temple/outer eye corners! Hair must be cleanly pulled back or tucked behind ears so the full eye region and brows are completely bare.
-   - Reason in PL: "Włosy zasłaniają lub nachodzą na oczy / linię brwi. Zgodnie z oficjalnymi wymogami biometrycznymi do Karty Pobytu i paszportu oczy oraz cała linia brwi muszą być w 100% odsłonięte (włosy należy odgarnąć za uszy lub związać)."
-   - Reason in UA: "Волосся закриває або спадає на очі чи лінію брів. Згідно з офіційними біометричними вимогами до Карти побиту та паспорта очі та вся лінія брів мають бути на 100% відкритими (волосся необхідно прибрати за вуха або назад)."
+КРИТЕРИИ ПРОВЕРКИ (СТРОГО БРАКОВАТЬ can_proceed_to_processing = false, ЕСЛИ):
+1. ОЧКИ (ЛЮБЫЕ ОЧКИ СТРОГО ЗАПРЕЩЕНЫ): надеты солнцезащитные, темные, прозрачные очки для зрения, очки без оправы или оправы. Если на человеке надеты любые очки — СТРОГО БРАК!
+2. ГОЛОВНЫЕ УБОРЫ: надеты шапка, кепка, бейсболка, капюшон, повязка или платок. Голова должна быть полностью открыта.
+3. ГЛАЗА И ВЗГЛЯД: хотя бы один глаз закрыт или прищурен, глаза опущены вниз, взгляд отведен в сторону (не в объектив), зрачки перекрыты волосами или бликами. Взгляд должен быть направлен прямо в камеру!
+4. ОСВЕЩЕНИЕ И ТЕНИ: глубокие контрастные тени на половине лица, скрывающие глаза или овал лица, либо сильный пересвет.
+5. ВОЛОСЫ НА ЛИЦЕ: пряди волос или челка перекрывают глаза, зрачки или закрывают брови.
+6. ПОЛОЖЕНИЕ ГОЛОВЫ И ВЫРАЖЕНИЕ: голова повернута вбок (профиль, полуанфас), запрокинута или сильно наклонена; рот открыт, видны зубы, ужимки.
+7. КАЧЕСТВО: сильный смаз движения или расфокус.
 
-2. EYEGLASSES RULE (STRICT NO GLASSES OF ANY KIND):
-   - ABSOLUTELY NO GLASSES PERMITTED: The person MUST NOT be wearing ANY eyeglasses (optical glasses for vision, prescription spectacles, reading glasses, sunglasses, tinted glasses, transparent glasses, rimless glasses, or fashion frames).
-   - REJECT IMMEDIATELY (valid=false) if ANY glasses or spectacles are detected on the face!
-   - Reason in PL if glasses detected: "Obecność okularów na zdjęciu. Zgodnie z wymogami urzędowymi dozwolone są wyłącznie zdjęcia bez żadnych okularów (w tym korekcyjnych i przeciwsłonecznych). Prosimy zdjąć okulary i zrobić zdjęcie ponownie."
-   - Reason in UA if glasses detected: "Наявність окулярів на фото. Згідно з вимогами, дозволені виключно фото без будь-яких окулярów (зокрема оптичних, для зору та сонцезахисних). Будь ласка, зніміть окуляри та сфотографуйтеся знову."
+ЧТО РАЗРЕШЕНО:
+- Пирсинг на лице (губа, нос, серьги) и родинки — ПОЛНОСТЬЮ РАЗРЕШЕНЫ.
+- Обычный комнатный фон (его удалит программа).
 
-3. PIERCINGS & JEWELRY RULE:
-   - PIERCINGS ARE FULLY ALLOWED: Facial piercings (nose studs/rings, nostril piercing, septum, lip piercing, labret, eyebrow piercing/ring, ear piercings, earrings, ear studs, ear tunnels, chin piercing) ARE 100% PERMITTED and MUST NOT BE REJECTED!
-   - REJECT FOR PIERCING ONLY IF: The jewelry/piercing literally covers half the face or conceals primary facial biometrics (eyes or mouth like a large face mask). Normal, discrete, or standard piercings of any type are fully acceptable!
-
-4. PHOTO QUALITY & RESOLUTION:
-   - Face MUST be in clear focus, with visible fine facial details.
-   - REJECT ONLY IF: photo is severely blurry, out-of-focus, motion-blurred, extreme pixelation, or face is unidentifiable.
-
-5. LIGHTING:
-   - REJECT ONLY IF: deep harsh pitch-black shadows across eyes/face or extreme blinding white flash blowout obscuring face features.
-
-6. EYES & EXPRESSION:
-   - Eyes wide open looking directly into camera lens.
-   - Mouth firmly closed, neutral expression.
-   - REJECT IF: eyes closed, half-closed, squinting, or wide open mouth, smiling, grinning.
-
-7. HEAD POSE & POSITION:
-   - Frontal view (en-face).
-   - REJECT ONLY IF: profile, 3/4 turn, or head tilted far away.
-
-8. CLOTHING & ATTIRE RULES:
-   - Everyday civilian clothing of ANY pattern, color, or style (e.g. plaid shirts, checkered shirts, patterned shirts, polo, t-shirt, casual clothes) is 100% PERMITTED by Polish statutory law.
-   - DO NOT REJECT for clothing patterns, colors, or casual shirts.
-
-9. BACKGROUND (IMPORTANT):
-   - This is the initial photo before AI background removal. DO NOT REJECT for background color or room background.
-
-Respond ONLY with valid JSON:
+Верни ответ СТРОГО в формате JSON без markdown-оберток (без ```json):
 {
-  "valid": true or false,
-  "high_quality": true or false,
-  "sharp_and_clear": true or false,
-  "eyes_open": true or false,
-  "mouth_closed": true or false,
-  "facing_camera": true or false,
-  "neutral_expression": true or false,
-  "rejection_reason_pl": "Precyzyjny powód odrzucenia po polsku jeśli valid=false. Pusty string jeśli valid=true.",
-  "rejection_reason_ua": "Точна причина відхилення українською якщо valid=false. Порожній рядок якщо valid=true."
+  "can_proceed_to_processing": true,
+  "confidence_score": 0.95,
+  "critical_errors": [],
+  "checks": {
+    "no_glasses": true,
+    "no_headwear": true,
+    "eyes_open_looking_straight": true,
+    "lighting_and_shadows_acceptable": true,
+    "hair_not_blocking_eyes": true,
+    "head_straight_mouth_closed": true,
+    "sharpness_acceptable": true
+  },
+  "user_feedback_ru": "Фото подходит для обработки.",
+  "user_feedback_ua": "Фото підходить для обробки.",
+  "user_feedback_pl": "Zdjęcie nadaje się do przetworzenia."
 }"""
 
     gemini_payload = {
@@ -572,8 +636,30 @@ Respond ONLY with valid JSON:
                                 raw_text += p["text"]
                     if raw_text:
                         parsed = _extract_json_from_gemini(raw_text)
-                        if isinstance(parsed, dict) and "valid" in parsed:
-                            return parsed
+                        if isinstance(parsed, dict):
+                            # Normalize boolean valid
+                            if "can_proceed_to_processing" in parsed:
+                                parsed["valid"] = bool(parsed["can_proceed_to_processing"])
+                            elif "is_valid" in parsed:
+                                parsed["valid"] = bool(parsed["is_valid"])
+
+                            # Normalize feedback / rejection reasons
+                            if not parsed.get("valid"):
+                                err_list = parsed.get("critical_errors") or parsed.get("reasons_for_rejection") or []
+                                err_msg = ", ".join(err_list) if isinstance(err_list, list) else str(err_list)
+                                fb_ru = parsed.get("user_feedback_ru") or parsed.get("recommendations_for_user_ru") or parsed.get("recommendations_for_user") or err_msg
+                                fb_ua = parsed.get("user_feedback_ua") or parsed.get("recommendations_for_user_ua") or fb_ru
+                                fb_pl = parsed.get("user_feedback_pl") or parsed.get("recommendations_for_user_pl") or fb_ru
+                                parsed["rejection_reason_ru"] = fb_ru
+                                parsed["rejection_reason_ua"] = fb_ua
+                                parsed["rejection_reason_pl"] = fb_pl
+                            else:
+                                parsed["rejection_reason_ru"] = ""
+                                parsed["rejection_reason_ua"] = ""
+                                parsed["rejection_reason_pl"] = ""
+
+                            if "valid" in parsed:
+                                return parsed
                 except Exception as e:
                     print(f"[WARN] Gemini model {model} retry {retry+1} attempt failed: {e}")
                     if retry == 0:
