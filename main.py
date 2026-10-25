@@ -175,7 +175,7 @@ async def process_photo_remove_bg(
         if not content:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
-        # Исключительно HuggingFace Space (BiRefNet) - без вызовов Replicate
+        # Виключно HuggingFace Space (BiRefNet)
         result_bytes, media_type = await asyncio.to_thread(remove_bg_huggingface, content)
         headers = {
             "X-Plikowo-Engine": "HuggingFace-BiRefNet",
