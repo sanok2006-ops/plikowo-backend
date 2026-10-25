@@ -105,7 +105,7 @@ def home():
         "analyzer_available": analyzer is not None,
         "analyzer_error": ANALYZER_IMPORT_ERROR,
         "quality_profile": "MOS Foto Pro (Anti-Wax/Anti-Doll)",
-        "features": ["local_cv_analysis", "adaptive_router", "nightmareai/real-esrgan", "briaai/rmbg-1.4", "qa_gate", "mos_35x45"]
+        "features": ["local_cv_analysis", "huggingface_birefnet", "mos_35x45"]
     }
 
 
@@ -172,49 +172,21 @@ async def process_photo_remove_bg(
 ):
     try:
         content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
 
-        # 1. Основной любимый движок: HuggingFace Space (BiRefNet) - бесплатно и качественно
-        try:
-            result_bytes, media_type = await asyncio.to_thread(remove_bg_huggingface, content)
-            headers = {
-                "X-Plikowo-Engine": "HuggingFace-BiRefNet",
-                "X-Plikowo-Scenario": "A_HIGH_QUALITY",
-                "X-Plikowo-Corrections": "hf_birefnet_alpha"
-            }
-            return Response(content=result_bytes, media_type=media_type, headers=headers)
-        except Exception as e_hf:
-            print(f"[WARN] HuggingFace Space temporary error: {e_hf}, falling back to Replicate...")
+        # Исключительно HuggingFace Space (BiRefNet) - без вызовов Replicate
+        result_bytes, media_type = await asyncio.to_thread(remove_bg_huggingface, content)
+        headers = {
+            "X-Plikowo-Engine": "HuggingFace-BiRefNet",
+            "X-Plikowo-Scenario": "A_HIGH_QUALITY",
+            "X-Plikowo-Corrections": "hf_birefnet_alpha"
+        }
+        return Response(content=result_bytes, media_type=media_type, headers=headers)
 
-        # 2. Автоматический надежный fallback на Replicate (если HuggingFace временно спит)
-        if router:
-            result_bytes, media_type, meta = router.process_image(
-                content,
-                output_biometric_jpeg=False
-            )
-            headers = {
-                "X-Plikowo-Engine": "Replicate-RMBG-Fallback",
-                "X-Plikowo-Scenario": str(meta.get("scenario", "UNKNOWN")),
-                "X-Plikowo-Corrections": ",".join(meta.get("applied_corrections", []))
-            }
-            return Response(content=result_bytes, media_type=media_type, headers=headers)
-
-        raise HTTPException(status_code=500, detail="Both HuggingFace and fallback engines failed.")
-
-    except BiometricRejectionError as e:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "status": "rejected",
-                "message": getattr(e, "reasons", [{}])[0].get("ru", "Фото не подходит") if getattr(e, "reasons", None) else "Rejection",
-                "reasons": getattr(e, "reasons", []),
-                "analysis": getattr(e, "analysis", {})
-            }
-        )
     except Exception as e:
-        print(f"[ERROR] /remove-bg failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
-        print(f"[ERROR] /remove-bg failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        print(f"[ERROR] HuggingFace /remove-bg failed: {e}")
+        raise HTTPException(status_code=500, detail=f"HuggingFace error: {str(e)}")
 
 
 # --- 3. БИОМЕТРИЧЕСКОЕ ФОТО ДЛЯ MOS / KARTA POBYTU (35x45 мм, 684x883 px) ---

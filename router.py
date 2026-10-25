@@ -15,7 +15,6 @@ from typing import Dict, Any, Tuple, Optional
 import cv2
 import httpx
 from PIL import Image, ImageOps
-import replicate
 from dotenv import load_dotenv
 
 load_dotenv()

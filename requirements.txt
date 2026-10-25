@@ -6,6 +6,5 @@ pillow-heif==0.16.0
 pytesseract==0.3.10
 numpy>=1.26.0
 opencv-python-headless>=4.10.0
-replicate>=1.0.0
 httpx>=0.27.0
 python-dotenv>=1.0.0
